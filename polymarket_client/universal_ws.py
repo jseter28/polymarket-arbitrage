@@ -31,6 +31,7 @@ import json
 import logging
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncIterator, Optional
@@ -393,6 +394,17 @@ class PolymarketUniversalWS:
         # tag_slug -> {"tag_id": int, "slug": str, "label": str}
         self._tag_registry: dict[str, dict] = {}
 
+        # Per-market live metrics (Phase 2). All keyed by market_id; populated
+        # lazily on first frame so untouched markets cost nothing.
+        self._market_msg_count: dict[str, int] = {}
+        self._market_last_msg_at: dict[str, float] = {}  # monotonic
+        self._market_msg_timestamps: dict[str, deque[float]] = {}  # rolling 60s
+        self._market_recent_events: dict[str, deque[dict]] = {}    # last 20
+
+        # market_id -> set of subscriber queues (FastAPI WS handlers push into these).
+        self._market_subscribers: dict[str, set[asyncio.Queue]] = {}
+        self._subscriber_drops: int = 0
+
         self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=queue_maxsize)
         self._stop_event: asyncio.Event = asyncio.Event()
         self._drops: int = 0
@@ -581,6 +593,28 @@ class PolymarketUniversalWS:
             })
         return out
 
+    def _market_age_and_rate(self, market_id: str, now_mono: float) -> tuple[Optional[float], float]:
+        """
+        Return ``(last_msg_age_s, msg_rate_per_sec_1min)`` for one market.
+
+        ``last_msg_age_s`` is None if no message has been seen yet.
+        ``msg_rate_per_sec_1min`` is len(timestamp_window) / 60, computed after
+        evicting entries older than 60s so a quiet market reports 0 rather
+        than a stale rate.
+        """
+        last_at = self._market_last_msg_at.get(market_id)
+        last_msg_age_s = (now_mono - last_at) if last_at is not None else None
+
+        ts_window = self._market_msg_timestamps.get(market_id)
+        if not ts_window:
+            return last_msg_age_s, 0.0
+
+        cutoff = now_mono - 60.0
+        while ts_window and ts_window[0] < cutoff:
+            ts_window.popleft()
+        rate = len(ts_window) / 60.0
+        return last_msg_age_s, rate
+
     def markets_by_tag(
         self,
         tag_slug: str,
@@ -594,14 +628,14 @@ class PolymarketUniversalWS:
           ``market_id, question, yes_bid, yes_ask, no_bid, no_ask, spread,
             volume_24h, liquidity, last_msg_age_s, msg_rate_1min, tags, end_date``
 
-        ``msg_rate_1min`` is always 0 in Phase 1 — per-market metrics arrive
-        in Phase 2. ``last_msg_age_s`` is derived from the combined book
-        timestamp when a book has been received, else None.
+        ``last_msg_age_s`` and ``msg_rate_1min`` come from the per-market
+        metrics maintained by `_record_market_event` — both are ``None``/``0``
+        for markets that haven't received a frame yet.
 
         ``sort`` ∈ {"volume" (default), "last_update", "msg_rate"}. Unknown
         sorts fall through to "volume".
         """
-        now = datetime.utcnow()
+        now_mono = time.monotonic()
         rows: list[dict] = []
         want_uncat = tag_slug == self.UNCATEGORIZED_SLUG
 
@@ -623,9 +657,7 @@ class PolymarketUniversalWS:
                 if (yes_ask is not None and yes_bid is not None)
                 else None
             )
-            last_msg_age_s: Optional[float] = None
-            if book and book.timestamp:
-                last_msg_age_s = (now - book.timestamp).total_seconds()
+            last_msg_age_s, msg_rate = self._market_age_and_rate(market_id, now_mono)
 
             rows.append({
                 "market_id": market_id,
@@ -640,7 +672,7 @@ class PolymarketUniversalWS:
                 "last_msg_age_s": (
                     round(last_msg_age_s, 1) if last_msg_age_s is not None else None
                 ),
-                "msg_rate_1min": 0,  # populated in Phase 2
+                "msg_rate_1min": round(msg_rate, 2),
                 "tags": [
                     {"slug": s, "label": (self._tag_registry.get(s) or {}).get("label", s)}
                     for s in m.tag_slugs
@@ -663,9 +695,123 @@ class PolymarketUniversalWS:
 
         return rows[:limit]
 
+    def market_detail(self, market_id: str) -> Optional[dict]:
+        """
+        Full per-market snapshot for the drill-in view.
+
+        Returns ``None`` if ``market_id`` is unknown to the cache. When known
+        but no book has landed yet, ``yes_book``/``no_book`` are present-but-empty
+        and the consumer should render a "waiting for first frame" state.
+        """
+        m = self._market_meta.get(market_id)
+        if m is None:
+            return None
+
+        now_mono = time.monotonic()
+        last_msg_age_s, msg_rate = self._market_age_and_rate(market_id, now_mono)
+        book = self._books.get(market_id)
+
+        def _ladder(side: OrderBookSide) -> list[dict]:
+            return [{"price": l.price, "size": l.size} for l in side.levels]
+
+        if book is not None:
+            yes_book = {"bids": _ladder(book.yes.bids), "asks": _ladder(book.yes.asks)}
+            no_book = {"bids": _ladder(book.no.bids), "asks": _ladder(book.no.asks)}
+        else:
+            yes_book = {"bids": [], "asks": []}
+            no_book = {"bids": [], "asks": []}
+
+        return {
+            "market_id": market_id,
+            "question": m.question,
+            "description": m.description,
+            "tags": [
+                {"slug": s, "label": (self._tag_registry.get(s) or {}).get("label", s)}
+                for s in m.tag_slugs
+            ],
+            "volume_24h": m.volume_24h,
+            "liquidity": m.liquidity,
+            "end_date": m.end_date.isoformat() if m.end_date else None,
+            "yes_book": yes_book,
+            "no_book": no_book,
+            "last_msg_age_s": (
+                round(last_msg_age_s, 1) if last_msg_age_s is not None else None
+            ),
+            "msg_rate_1min": round(msg_rate, 2),
+            "total_messages": self._market_msg_count.get(market_id, 0),
+            "recent_events": list(self._market_recent_events.get(market_id, ())),
+        }
+
+    async def subscribe_market(self, market_id: str, queue: asyncio.Queue) -> None:
+        """
+        Register ``queue`` to receive future fanout events for ``market_id``.
+
+        Idempotent: re-subscribing the same queue is a no-op. Async-flavored
+        for protocol symmetry with WS handlers — internally this is sync.
+        """
+        subs = self._market_subscribers.setdefault(market_id, set())
+        subs.add(queue)
+
+    async def unsubscribe_market(self, market_id: str, queue: asyncio.Queue) -> None:
+        """Deregister ``queue`` from ``market_id`` fanout. Idempotent."""
+        subs = self._market_subscribers.get(market_id)
+        if not subs:
+            return
+        subs.discard(queue)
+        if not subs:
+            self._market_subscribers.pop(market_id, None)
+
     # -----------------------------------------------------------------------
     # Internal: book state mutations (lifted from PolymarketClient)
     # -----------------------------------------------------------------------
+
+    def _record_market_event(self, market_id: str, event: dict) -> None:
+        """
+        Update per-market counters, rolling 60s timestamp window, and recent-events
+        deque. Cheap (O(1) amortized) — called inline from message handlers.
+        """
+        now = time.monotonic()
+        self._market_msg_count[market_id] = self._market_msg_count.get(market_id, 0) + 1
+        self._market_last_msg_at[market_id] = now
+
+        ts_window = self._market_msg_timestamps.get(market_id)
+        if ts_window is None:
+            ts_window = deque()
+            self._market_msg_timestamps[market_id] = ts_window
+        ts_window.append(now)
+        cutoff = now - 60.0
+        while ts_window and ts_window[0] < cutoff:
+            ts_window.popleft()
+
+        recent = self._market_recent_events.get(market_id)
+        if recent is None:
+            recent = deque(maxlen=20)
+            self._market_recent_events[market_id] = recent
+        recent.append(event)
+
+    def _fanout(self, market_id: str, event: dict) -> None:
+        """
+        Push ``event`` to every subscriber queue registered for ``market_id``.
+
+        Drop-oldest on full queue (each WS handler owns a bounded queue and
+        mirrors universal_ws's upstream queue strategy). No-op if no subscribers.
+        """
+        subs = self._market_subscribers.get(market_id)
+        if not subs:
+            return
+        for q in list(subs):  # snapshot to tolerate concurrent un/subscribe
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                self._subscriber_drops += 1
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    self._subscriber_drops += 1
 
     def _apply_book_snapshot(self, msg: dict) -> Optional[str]:
         """Apply a 'book' snapshot. Returns market_id if known asset, else None."""
@@ -704,6 +850,17 @@ class PolymarketUniversalWS:
         else:
             combined.no = token_book
         combined.timestamp = datetime.utcnow()
+
+        fanout_event = {
+            "type": "book_update",
+            "market_id": market_id,
+            "token": token_type.value.upper(),  # "YES" / "NO"
+            "bids": [{"price": l.price, "size": l.size} for l in bids],
+            "asks": [{"price": l.price, "size": l.size} for l in asks],
+        }
+        self._record_market_event(market_id, fanout_event)
+        self._fanout(market_id, fanout_event)
+
         return market_id
 
     def _apply_price_change(self, msg: dict) -> set[str]:
@@ -746,6 +903,18 @@ class PolymarketUniversalWS:
                 levels.sort(key=lambda l: l.price)
             token_book.last_update = datetime.utcnow()
             combined.timestamp = datetime.utcnow()
+
+            fanout_event = {
+                "type": "price_change",
+                "market_id": market_id,
+                "token": token_type.value.upper(),
+                "side": side_str,
+                "price": price,
+                "size": size,
+            }
+            self._record_market_event(market_id, fanout_event)
+            self._fanout(market_id, fanout_event)
+
             touched.add(market_id)
         return touched
 

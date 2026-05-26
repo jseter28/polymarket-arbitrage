@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from polymarket_client.universal_ws import PolymarketUniversalWS
@@ -374,6 +374,37 @@ DASHBOARD_HTML = r"""<!doctype html>
   #markets-table td.q { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #markets-table .nobook { color: var(--muted); font-style: italic; }
   #markets-table .empty { padding: 16px; text-align: center; color: var(--muted); font-style: italic; }
+  #markets-table tbody tr.clickable { cursor: pointer; }
+  #markets-table tbody tr.clickable:hover { background: var(--bg3); }
+
+  /* ---------- Drill-in view ---------- */
+  .back-link { color: var(--muted); text-decoration: none; font-size: 12px; display: inline-block; margin-bottom: 8px; }
+  .back-link:hover { color: var(--accent); }
+  .detail-header { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 10px 14px; margin-bottom: 12px; }
+  .detail-header h2 { margin: 0 0 4px 0; font-size: 15px; font-weight: 600; color: var(--fg); text-transform: none; letter-spacing: 0; }
+  .detail-meta { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; align-items: center; }
+  .detail-meta b { color: var(--fg); font-weight: 500; }
+  .tag-chip { background: var(--bg3); padding: 1px 7px; border-radius: 3px; font-size: 11px; color: var(--muted); }
+  .ws-state { margin-left: auto; font-size: 11px; padding: 1px 7px; border-radius: 3px; }
+  .ws-state.open { color: var(--good); background: rgba(74,222,128,0.1); }
+  .ws-state.connecting, .ws-state.reconnecting { color: var(--warn); background: rgba(251,191,36,0.1); }
+  .ws-state.closed { color: var(--danger); background: rgba(239,68,68,0.1); }
+
+  .books-row { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-bottom: 12px; }
+  .book-panel { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 10px; }
+  .book-panel h3 { margin: 0 0 8px 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; display: flex; justify-content: space-between; }
+  .book-panel h3 .best { color: var(--fg); font-variant-numeric: tabular-nums; }
+  .book-ladder { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .ladder-row { display: flex; justify-content: space-between; padding: 2px 8px; border-radius: 2px; }
+  .ladder-row.ask { color: #ef4444; }
+  .ladder-row.bid { color: #4ade80; }
+  .ladder-row.mid { justify-content: center; color: var(--muted); padding: 4px 0; margin: 2px 0; border-top: 1px dashed var(--bg3); border-bottom: 1px dashed var(--bg3); font-size: 11px; }
+  .ladder-row .px { color: var(--fg); font-weight: 500; min-width: 50px; }
+  .ladder-row .sz { color: inherit; opacity: 0.9; }
+  .book-panel .empty { padding: 20px; text-align: center; color: var(--muted); font-style: italic; font-size: 12px; }
+
+  .detail-stats { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 8px 14px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .detail-stats b { color: var(--fg); font-weight: 500; }
 </style>
 </head>
 <body>
@@ -440,22 +471,56 @@ DASHBOARD_HTML = r"""<!doctype html>
     <ul id="categories-list"><li class="empty">loading…</li></ul>
   </aside>
   <main class="grid-wrap">
-    <div class="grid-header">
-      <h2 id="grid-title">Markets</h2>
-      <span class="grid-meta" id="grid-meta">—</span>
+    <div id="grid-pane">
+      <div class="grid-header">
+        <h2 id="grid-title">Markets</h2>
+        <span class="grid-meta" id="grid-meta">—</span>
+      </div>
+      <div class="markets-panel">
+        <table id="markets-table">
+          <thead><tr>
+            <th>Question</th>
+            <th class="num">YES</th>
+            <th class="num">NO</th>
+            <th class="num">spread</th>
+            <th class="num">vol 24h</th>
+            <th class="num">last upd</th>
+          </tr></thead>
+          <tbody><tr><td colspan="6" class="empty">pick a category</td></tr></tbody>
+        </table>
+      </div>
     </div>
-    <div class="markets-panel">
-      <table id="markets-table">
-        <thead><tr>
-          <th>Question</th>
-          <th class="num">YES</th>
-          <th class="num">NO</th>
-          <th class="num">spread</th>
-          <th class="num">vol 24h</th>
-          <th class="num">last upd</th>
-        </tr></thead>
-        <tbody><tr><td colspan="6" class="empty">pick a category</td></tr></tbody>
-      </table>
+
+    <div id="detail-pane" class="hidden">
+      <a href="#markets" class="back-link" id="detail-back">← back to grid</a>
+      <div class="detail-header">
+        <h2 id="detail-question">loading…</h2>
+        <div class="detail-meta">
+          <span id="detail-end">—</span>
+          <span id="detail-tags"></span>
+          <span>vol 24h: <b id="detail-vol">—</b></span>
+          <span>liquidity: <b id="detail-liq">—</b></span>
+          <span id="detail-ws-state" class="ws-state closed">offline</span>
+        </div>
+      </div>
+      <div class="books-row">
+        <div class="book-panel">
+          <h3>YES book <span class="best" id="detail-yes-best">—</span></h3>
+          <div class="book-ladder" id="book-yes"><div class="empty">waiting for first frame…</div></div>
+        </div>
+        <div class="book-panel">
+          <h3>NO book <span class="best" id="detail-no-best">—</span></h3>
+          <div class="book-ladder" id="book-no"><div class="empty">waiting for first frame…</div></div>
+        </div>
+      </div>
+      <div class="detail-stats">
+        <span>YES spread: <b id="detail-yes-spread">—</b></span>
+        <span>NO spread: <b id="detail-no-spread">—</b></span>
+        <span>implied: <b id="detail-implied">—</b></span>
+        <span>msg rate (60s): <b id="detail-msgrate">0.0</b> /s</span>
+        <span>last msg: <b id="detail-lastmsg">—</b></span>
+        <span>total msgs: <b id="detail-totalmsgs">0</b></span>
+      </div>
     </div>
   </main>
 </div><!-- /#view-markets -->
@@ -618,15 +683,16 @@ let gridPollTimer = null;
 
 function parseHash() {
   const h = (location.hash || '').replace(/^#/, '');
-  if (!h || h === VIEW_STATUS) return { view: VIEW_STATUS, cat: null };
-  if (h === VIEW_MARKETS) return { view: VIEW_MARKETS, cat: null };
+  if (!h || h === VIEW_STATUS) return { view: VIEW_STATUS };
+  if (h === VIEW_MARKETS) return { view: VIEW_MARKETS };
   if (h.startsWith('cat/')) return { view: VIEW_MARKETS, cat: decodeURIComponent(h.slice(4)) };
+  if (h.startsWith('market/')) return { view: VIEW_MARKETS, market: decodeURIComponent(h.slice(7)) };
   // Unknown hash → fall back to status, don't blow up.
-  return { view: VIEW_STATUS, cat: null };
+  return { view: VIEW_STATUS };
 }
 
 function applyRoute() {
-  const { view, cat } = parseHash();
+  const { view, cat, market } = parseHash();
   currentView = view;
 
   document.getElementById('view-status').classList.toggle('hidden', view !== VIEW_STATUS);
@@ -635,13 +701,29 @@ function applyRoute() {
   document.getElementById('tab-markets').classList.toggle('active', view === VIEW_MARKETS);
 
   if (view === VIEW_MARKETS) {
-    // First entry to markets view → load categories so the sidebar paints.
     if (categoriesCache.length === 0) loadCategories();
-    pickCategory(cat, /*pushHash=*/false);
-    startGridPolling();
+    if (market) {
+      showDetailPane();
+      enterDetail(market);
+    } else {
+      leaveDetail();
+      showGridPane();
+      pickCategory(cat, /*pushHash=*/false);
+      startGridPolling();
+    }
   } else {
     stopGridPolling();
+    leaveDetail();
   }
+}
+
+function showGridPane() {
+  document.getElementById('grid-pane').classList.remove('hidden');
+  document.getElementById('detail-pane').classList.add('hidden');
+}
+function showDetailPane() {
+  document.getElementById('grid-pane').classList.add('hidden');
+  document.getElementById('detail-pane').classList.remove('hidden');
 }
 
 async function loadCategories() {
@@ -732,7 +814,7 @@ function renderMarkets(rows, total) {
     const spread = r.spread != null ? r.spread.toFixed(3) : '<span class="nobook">—</span>';
     const vol = fmtMoney(r.volume_24h);
     const age = r.last_msg_age_s == null ? '<span class="nobook">—</span>' : fmtAge(r.last_msg_age_s);
-    return `<tr class="${stale.trim()}">
+    return `<tr class="clickable${stale}" data-market-id="${escapeAttr(r.market_id)}">
       <td class="q" title="${escapeAttr(r.question)}">${escapeHtml(r.question)}</td>
       <td class="num">${yes}</td>
       <td class="num">${no}</td>
@@ -742,6 +824,14 @@ function renderMarkets(rows, total) {
     </tr>`;
   }).join('');
 }
+
+// Event-delegation: any click on a grid row navigates to that market's drill-in.
+document.addEventListener('click', (e) => {
+  const tr = e.target.closest('#markets-table tbody tr.clickable');
+  if (!tr) return;
+  const mid = tr.dataset.marketId;
+  if (mid) location.hash = '#market/' + encodeURIComponent(mid);
+});
 
 function fmtPx(bid, ask) {
   // Display the side that has data; mid if both exist.
@@ -761,6 +851,302 @@ function escapeHtml(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
+
+// ---------- WebSocket client (drill-in live feed) ----------
+
+let wsConn = null;
+let wsState = 'closed';          // closed | connecting | open | reconnecting
+let wsReconnectDelay = 1000;     // ms; exponential to 30s
+let wsReconnectTimer = null;
+let wsPingTimer = null;
+let wsPongDeadline = 0;          // Date.now() ms — close & reconnect if exceeded
+let activeMarketSub = null;      // market_id currently subscribed for drill-in
+
+function setWsStateBadge(s) {
+  const el = document.getElementById('detail-ws-state');
+  if (!el) return;
+  el.classList.remove('open', 'connecting', 'reconnecting', 'closed');
+  el.classList.add(s);
+  el.textContent = s;
+}
+
+function wsEnsureOpen() {
+  if (wsState === 'open' || wsState === 'connecting') return;
+  wsState = 'connecting';
+  setWsStateBadge('connecting');
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const url = `${proto}//${location.host}/ws`;
+  try {
+    wsConn = new WebSocket(url);
+  } catch (e) {
+    console.warn('WebSocket constructor failed', e);
+    scheduleReconnect();
+    return;
+  }
+  wsConn.onopen = () => {
+    wsState = 'open';
+    setWsStateBadge('open');
+    wsReconnectDelay = 1000;
+    wsPongDeadline = Date.now() + 90000;
+    if (activeMarketSub) wsSend({op: 'subscribe', market_id: activeMarketSub});
+    if (!wsPingTimer) wsPingTimer = setInterval(wsHeartbeat, 30000);
+  };
+  wsConn.onmessage = (e) => handleWsMessage(e.data);
+  wsConn.onclose = () => {
+    wsState = 'closed';
+    setWsStateBadge('closed');
+    if (wsPingTimer) { clearInterval(wsPingTimer); wsPingTimer = null; }
+    if (activeMarketSub) scheduleReconnect();
+  };
+  wsConn.onerror = () => { /* onclose handles cleanup */ };
+}
+
+function wsSend(msg) {
+  if (wsConn && wsState === 'open') {
+    try { wsConn.send(JSON.stringify(msg)); } catch (e) { /* ignore */ }
+  }
+}
+
+function scheduleReconnect() {
+  if (wsReconnectTimer) clearTimeout(wsReconnectTimer);
+  wsState = 'reconnecting';
+  setWsStateBadge('reconnecting');
+  wsReconnectTimer = setTimeout(() => {
+    wsReconnectTimer = null;
+    if (activeMarketSub) wsEnsureOpen();
+  }, wsReconnectDelay);
+  wsReconnectDelay = Math.min(wsReconnectDelay * 2, 30000);
+}
+
+function wsHeartbeat() {
+  if (wsState !== 'open') return;
+  wsSend({op: 'ping'});
+  if (Date.now() > wsPongDeadline) {
+    // Server stopped pong'ing. Force close → onclose schedules reconnect.
+    try { wsConn.close(); } catch (e) { /* ignore */ }
+  }
+}
+
+function handleWsMessage(raw) {
+  let msg;
+  try { msg = JSON.parse(raw); } catch (e) { return; }
+  if (msg.type === 'pong') { wsPongDeadline = Date.now() + 90000; return; }
+  if (msg.type === 'snapshot') { renderDetailSnapshot(msg.market_id, msg.data); return; }
+  if (msg.type === 'book_update') { applyBookUpdate(msg); return; }
+  if (msg.type === 'price_change') { applyPriceChange(msg); return; }
+  if (msg.type === 'error') { console.warn('ws error', msg.message); return; }
+}
+
+// ---------- Drill-in view ----------
+
+let detailMarketId = null;
+let detailYesBook = null;
+let detailNoBook = null;
+let detailMsgCount = 0;
+let detailRenderTimer = null;
+
+function enterDetail(marketId) {
+  if (activeMarketSub === marketId) {
+    // Already showing this market — just make sure the pane is visible.
+    showDetailPane();
+    return;
+  }
+  if (activeMarketSub) wsSend({op: 'unsubscribe', market_id: activeMarketSub});
+  activeMarketSub = marketId;
+  detailMarketId = marketId;
+  detailYesBook = null;
+  detailNoBook = null;
+  detailMsgCount = 0;
+
+  document.getElementById('detail-question').textContent = 'loading…';
+  document.getElementById('detail-end').textContent = '';
+  document.getElementById('detail-tags').innerHTML = '';
+  document.getElementById('detail-vol').textContent = '—';
+  document.getElementById('detail-liq').textContent = '—';
+  document.getElementById('detail-yes-best').textContent = '—';
+  document.getElementById('detail-no-best').textContent = '—';
+  document.getElementById('book-yes').innerHTML = '<div class="empty">waiting for first frame…</div>';
+  document.getElementById('book-no').innerHTML = '<div class="empty">waiting for first frame…</div>';
+  document.getElementById('detail-msgrate').textContent = '0.0';
+  document.getElementById('detail-lastmsg').textContent = '—';
+  document.getElementById('detail-totalmsgs').textContent = '0';
+
+  wsEnsureOpen();
+  if (wsState === 'open') wsSend({op: 'subscribe', market_id: marketId});
+  // If WS not open yet, onopen handler will subscribe.
+
+  stopGridPolling();
+  if (detailRenderTimer) clearInterval(detailRenderTimer);
+  // Re-paint stats once per second so msg rate / last-msg-age tick visibly.
+  detailRenderTimer = setInterval(updateDetailStats, 1000);
+}
+
+function leaveDetail() {
+  if (activeMarketSub) {
+    wsSend({op: 'unsubscribe', market_id: activeMarketSub});
+    activeMarketSub = null;
+  }
+  detailMarketId = null;
+  detailYesBook = null;
+  detailNoBook = null;
+  if (detailRenderTimer) { clearInterval(detailRenderTimer); detailRenderTimer = null; }
+}
+
+function renderDetailSnapshot(marketId, data) {
+  if (marketId !== detailMarketId) return; // stale (user navigated away)
+  document.getElementById('detail-question').textContent = data.question || '(no question)';
+
+  const endStr = data.end_date ? fmtEndDate(data.end_date) : 'no end date';
+  document.getElementById('detail-end').textContent = 'ends ' + endStr;
+
+  const tags = (data.tags || []).slice(0, 6);
+  document.getElementById('detail-tags').innerHTML = tags.map(t =>
+    `<span class="tag-chip">${escapeHtml(t.label)}</span>`
+  ).join(' ');
+
+  document.getElementById('detail-vol').textContent = fmtMoney(data.volume_24h);
+  document.getElementById('detail-liq').textContent = fmtMoney(data.liquidity);
+
+  detailYesBook = data.yes_book ? cloneBook(data.yes_book) : {bids: [], asks: []};
+  detailNoBook = data.no_book ? cloneBook(data.no_book) : {bids: [], asks: []};
+  detailMsgCount = data.total_messages || 0;
+
+  renderBooks();
+  updateDetailStats(data);
+}
+
+function cloneBook(b) {
+  return {
+    bids: (b.bids || []).map(l => ({price: l.price, size: l.size})),
+    asks: (b.asks || []).map(l => ({price: l.price, size: l.size})),
+  };
+}
+
+function applyBookUpdate(msg) {
+  if (msg.market_id !== detailMarketId) return;
+  const book = {
+    bids: (msg.bids || []).map(l => ({price: l.price, size: l.size})),
+    asks: (msg.asks || []).map(l => ({price: l.price, size: l.size})),
+  };
+  if (msg.token === 'YES') detailYesBook = book;
+  else if (msg.token === 'NO') detailNoBook = book;
+  detailMsgCount++;
+  renderBooks();
+}
+
+function applyPriceChange(msg) {
+  if (msg.market_id !== detailMarketId) return;
+  const book = msg.token === 'YES' ? detailYesBook : detailNoBook;
+  if (!book) return;
+  const side = msg.side === 'BUY' ? 'bids' : 'asks';
+  const levels = book[side];
+  const price = msg.price;
+  const size = msg.size;
+  const idx = levels.findIndex(l => l.price === price);
+  if (size === 0) {
+    if (idx >= 0) levels.splice(idx, 1);
+  } else if (idx >= 0) {
+    levels[idx].size = size;
+  } else {
+    levels.push({price, size});
+  }
+  if (side === 'bids') levels.sort((a, b) => b.price - a.price);
+  else levels.sort((a, b) => a.price - b.price);
+  detailMsgCount++;
+  renderBooks();
+}
+
+function renderBooks() {
+  if (detailYesBook) renderLadder('book-yes', detailYesBook, 'detail-yes-best');
+  if (detailNoBook) renderLadder('book-no', detailNoBook, 'detail-no-best');
+  // Stat fields that depend on book contents
+  const ys = detailYesBook ? bookSpread(detailYesBook) : null;
+  const ns = detailNoBook ? bookSpread(detailNoBook) : null;
+  document.getElementById('detail-yes-spread').textContent = ys != null ? ys.toFixed(3) : '—';
+  document.getElementById('detail-no-spread').textContent  = ns != null ? ns.toFixed(3) : '—';
+  // Implied = YES mid (if available)
+  const ym = detailYesBook ? bookMid(detailYesBook) : null;
+  document.getElementById('detail-implied').textContent = ym != null ? (ym * 100).toFixed(1) + '%' : '—';
+}
+
+function bookSpread(b) {
+  const bb = b.bids[0]?.price, ba = b.asks[0]?.price;
+  return (bb != null && ba != null) ? (ba - bb) : null;
+}
+function bookMid(b) {
+  const bb = b.bids[0]?.price, ba = b.asks[0]?.price;
+  return (bb != null && ba != null) ? (bb + ba) / 2 : null;
+}
+
+function renderLadder(elemId, book, bestElemId) {
+  const TOP_N = 6;
+  const asks = (book.asks || []).slice(0, TOP_N).reverse();  // highest at top
+  const bids = (book.bids || []).slice(0, TOP_N);
+  const bestBid = bids[0]?.price;
+  const bestAsk = (book.asks || [])[0]?.price;
+  const mid = (bestBid != null && bestAsk != null) ? (bestBid + bestAsk) / 2 : null;
+
+  const elem = document.getElementById(elemId);
+  if (asks.length === 0 && bids.length === 0) {
+    elem.innerHTML = '<div class="empty">empty book</div>';
+  } else {
+    let html = '';
+    for (const lvl of asks) {
+      html += `<div class="ladder-row ask"><span class="px">${lvl.price.toFixed(3)}</span><span class="sz">${fmtSize(lvl.size)}</span></div>`;
+    }
+    if (mid != null) {
+      html += `<div class="ladder-row mid">─── ${mid.toFixed(4)} ───</div>`;
+    }
+    for (const lvl of bids) {
+      html += `<div class="ladder-row bid"><span class="px">${lvl.price.toFixed(3)}</span><span class="sz">${fmtSize(lvl.size)}</span></div>`;
+    }
+    elem.innerHTML = html;
+  }
+
+  if (bestElemId) {
+    const best = document.getElementById(bestElemId);
+    if (bestBid != null && bestAsk != null) {
+      best.textContent = `${bestBid.toFixed(3)} / ${bestAsk.toFixed(3)}`;
+    } else {
+      best.textContent = '—';
+    }
+  }
+}
+
+function updateDetailStats(snapshotData) {
+  // Tick the time-sensitive fields once per second. Snapshot payload (when
+  // provided) supplies authoritative server-side msg_rate + last_msg_age.
+  if (snapshotData) {
+    document.getElementById('detail-msgrate').textContent = (snapshotData.msg_rate_1min || 0).toFixed(1);
+    document.getElementById('detail-lastmsg').textContent = snapshotData.last_msg_age_s == null ? '—' : fmtAge(snapshotData.last_msg_age_s);
+    document.getElementById('detail-totalmsgs').textContent = (snapshotData.total_messages || 0).toLocaleString();
+  } else {
+    document.getElementById('detail-totalmsgs').textContent = detailMsgCount.toLocaleString();
+    // Without a fresh snapshot, age and rate would need a fresh REST snapshot;
+    // skip rather than render stale values. The next snapshot (page revisit /
+    // resubscribe) will refresh these.
+  }
+}
+
+function fmtSize(s) {
+  if (s == null) return '—';
+  const n = Math.round(s);
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+  return n.toLocaleString();
+}
+function fmtEndDate(iso) {
+  try {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const y = d.getUTCFullYear();
+    const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const da = String(d.getUTCDate()).padStart(2, '0');
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    return `${y}-${mo}-${da} ${hh}:${mm} UTC`;
+  } catch (e) { return iso; }
+}
 
 window.addEventListener('hashchange', applyRoute);
 
@@ -821,7 +1207,136 @@ def create_app(recorder: HistoryRecorder, ws: PolymarketUniversalWS) -> FastAPI:
         rows = ws.markets_by_tag(tag_slug=tag, sort=sort, limit=limit)
         return JSONResponse({"tag": tag, "sort": sort, "count": len(rows), "markets": rows})
 
+    @app.get("/api/markets/{market_id}")
+    async def market_detail(market_id: str):
+        detail = ws.market_detail(market_id)
+        if detail is None:
+            return JSONResponse({"error": "unknown market_id"}, status_code=404)
+        return JSONResponse(detail)
+
+    @app.websocket("/ws")
+    async def ws_endpoint(conn: WebSocket):
+        await _handle_ws_connection(conn, ws)
+
     return app
+
+
+# ---------------------------------------------------------------------------
+# WebSocket connection handler
+# ---------------------------------------------------------------------------
+
+# Per-connection fanout queue size. Mirrors the universal_ws upstream queue
+# pattern: bounded with drop-oldest so a slow browser can't bloat memory.
+WS_QUEUE_MAXSIZE = 500
+WS_PONG_TIMEOUT_S = 90.0
+WS_WATCHDOG_PERIOD_S = 10.0
+
+
+async def _handle_ws_connection(conn: WebSocket, ws: PolymarketUniversalWS) -> None:
+    """
+    One browser-tab WebSocket lifetime. Multiplexes subscribe/unsubscribe/ping
+    over a single connection; pushes snapshot then live frames per market_id.
+
+    Cleanup invariant: every market subscribed during this connection is
+    unsubscribed before the function returns, even on crash/disconnect.
+    """
+    await conn.accept()
+
+    queue: asyncio.Queue = asyncio.Queue(maxsize=WS_QUEUE_MAXSIZE)
+    subscriptions: set[str] = set()
+    last_client_msg_at = time.monotonic()
+
+    async def receiver() -> None:
+        nonlocal last_client_msg_at
+        while True:
+            raw = await conn.receive_text()
+            last_client_msg_at = time.monotonic()
+            try:
+                msg = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(msg, dict):
+                continue
+            op = msg.get("op")
+            if op == "ping":
+                await conn.send_text(json.dumps({"type": "pong"}))
+                continue
+            if op == "subscribe":
+                mid = str(msg.get("market_id") or "")
+                if not mid or mid in subscriptions:
+                    continue
+                # Register the queue BEFORE taking the snapshot so any frames
+                # that arrive mid-snapshot are queued, not dropped on the floor.
+                await ws.subscribe_market(mid, queue)
+                subscriptions.add(mid)
+                detail = ws.market_detail(mid)
+                if detail is None:
+                    # Race: market id unknown. Roll back the subscribe.
+                    await ws.unsubscribe_market(mid, queue)
+                    subscriptions.discard(mid)
+                    await conn.send_text(json.dumps({
+                        "type": "error", "message": f"unknown market_id: {mid}",
+                    }))
+                    continue
+                await conn.send_text(json.dumps({
+                    "type": "snapshot", "market_id": mid, "data": detail,
+                }))
+                continue
+            if op == "unsubscribe":
+                mid = str(msg.get("market_id") or "")
+                if mid and mid in subscriptions:
+                    await ws.unsubscribe_market(mid, queue)
+                    subscriptions.discard(mid)
+                continue
+            # Unknown op → ignore silently (forward-compat).
+
+    async def sender() -> None:
+        while True:
+            event = await queue.get()
+            await conn.send_text(json.dumps(event))
+
+    async def watchdog() -> None:
+        # Close the socket if the browser stops sending heartbeats. The receiver
+        # task will then raise WebSocketDisconnect and tear down cleanup.
+        while True:
+            await asyncio.sleep(WS_WATCHDOG_PERIOD_S)
+            if time.monotonic() - last_client_msg_at > WS_PONG_TIMEOUT_S:
+                try:
+                    await conn.close(code=1000)
+                except Exception:
+                    pass
+                return
+
+    recv_task = asyncio.create_task(receiver(), name="ws_recv")
+    send_task = asyncio.create_task(sender(), name="ws_send")
+    wd_task = asyncio.create_task(watchdog(), name="ws_watchdog")
+
+    try:
+        await asyncio.wait(
+            {recv_task, send_task, wd_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except WebSocketDisconnect:
+        pass
+    finally:
+        for t in (recv_task, send_task, wd_task):
+            if not t.done():
+                t.cancel()
+        for t in (recv_task, send_task, wd_task):
+            try:
+                await t
+            except (asyncio.CancelledError, WebSocketDisconnect, Exception):
+                pass
+        for mid in list(subscriptions):
+            try:
+                await ws.unsubscribe_market(mid, queue)
+            except Exception:
+                pass
+        subscriptions.clear()
+        try:
+            await conn.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
