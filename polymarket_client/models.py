@@ -127,6 +127,9 @@ class OrderBook:
     yes: TokenOrderBook = field(default_factory=lambda: TokenOrderBook(TokenType.YES))
     no: TokenOrderBook = field(default_factory=lambda: TokenOrderBook(TokenType.NO))
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    # Monotonic-clock nanoseconds at the moment the bot first observed this book.
+    # Used for latency math only; do not display. None on paths that don't stamp (e.g. backtest).
+    recv_mono_ns: Optional[int] = None
     
     @property
     def best_bid_yes(self) -> Optional[float]:

@@ -670,8 +670,9 @@ class PolymarketClient(BasePolymarketClient):
                                 yes=yes_book,
                                 no=no_book,
                                 timestamp=datetime.utcnow(),
+                                recv_mono_ns=time.monotonic_ns(),
                             )
-                            
+
                             yield (market_id, orderbook)
                             await asyncio.sleep(request_delay)
                             
@@ -712,6 +713,7 @@ class PolymarketClient(BasePolymarketClient):
                 
                 for market_id in batch:
                     orderbook = self._generate_simulated_orderbook(market_id)
+                    orderbook.recv_mono_ns = time.monotonic_ns()
                     yield (market_id, orderbook)
                     await asyncio.sleep(0.02)  # Fast updates
                 
@@ -909,6 +911,7 @@ class PolymarketClient(BasePolymarketClient):
                     data = json.loads(raw)
                 except json.JSONDecodeError:
                     continue
+                recv_mono = time.monotonic_ns()
 
                 messages = data if isinstance(data, list) else [data]
                 for msg in messages:
@@ -918,10 +921,14 @@ class PolymarketClient(BasePolymarketClient):
                     if et == "book":
                         mid = self._apply_book_snapshot(msg)
                         if mid:
-                            yield (mid, self._snapshot_orderbook(mid))
+                            ob = self._snapshot_orderbook(mid)
+                            ob.recv_mono_ns = recv_mono
+                            yield (mid, ob)
                     elif et == "price_change":
                         for mid in self._apply_price_change(msg):
-                            yield (mid, self._snapshot_orderbook(mid))
+                            ob = self._snapshot_orderbook(mid)
+                            ob.recv_mono_ns = recv_mono
+                            yield (mid, ob)
                     # Other event types (last_trade_price, tick_size_change) ignored
         finally:
             stop.set()

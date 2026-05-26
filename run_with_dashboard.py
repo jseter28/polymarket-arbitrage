@@ -24,6 +24,7 @@ import uvicorn
 
 from polymarket_client import PolymarketClient
 from kalshi_client import KalshiClient
+from core import latency
 from core.data_feed import DataFeed
 from core.arb_engine import ArbEngine, ArbConfig
 from core.execution import ExecutionEngine, ExecutionConfig
@@ -66,6 +67,9 @@ class TradingBotWithDashboard:
         # Server
         self._server = None
         self._server_task = None
+
+        # Analyze worker task (R2)
+        self._analyze_worker_task = None
     
     async def start(self) -> None:
         """Start the bot and dashboard."""
@@ -157,13 +161,13 @@ class TradingBotWithDashboard:
             max_order_size=self.config.trading.max_order_size,
         ))
         
-        # Initialize data feed
+        # Initialize data feed (no on_update callback — analyze runs on a
+        # dedicated worker draining data_feed.next_update())
         market_ids = self.config.trading.markets.copy()
         self.data_feed = DataFeed(
             client=self.client,
             market_ids=market_ids,
             position_refresh_interval=5.0,
-            on_update=self._on_market_update,
             config=self.config,
         )
         await self.data_feed.start()
@@ -179,10 +183,16 @@ class TradingBotWithDashboard:
         )
         await self.dashboard_integration.start()
         
+        # Start analyze worker (drains data_feed.next_update())
+        self._analyze_worker_task = asyncio.create_task(self._analyze_worker())
+
         # Start fill simulation for dry run
         if self.config.is_dry_run and self.config.mode.simulate_fills:
             asyncio.create_task(self._simulate_fills())
-        
+
+        # Start periodic latency snapshot dump
+        asyncio.create_task(self._latency_dump_loop())
+
         # Start the web server
         await self._start_server()
         
@@ -201,36 +211,58 @@ class TradingBotWithDashboard:
         self._server = uvicorn.Server(config)
         self._server_task = asyncio.create_task(self._server.serve())
     
-    def _on_market_update(self, market_id: str, market_state) -> None:
-        """Handle market updates."""
-        if not self._running:
-            return
-        
-        # Check risk limits
-        if not self.risk_manager.within_global_limits():
-            return
-        
-        # Analyze for opportunities
-        signals = self.arb_engine.analyze(market_state)
-        
-        for signal in signals:
-            # Add to dashboard
-            if signal.opportunity:
-                self.dashboard_integration.add_opportunity(
-                    opportunity_type=signal.opportunity.opportunity_type.value,
-                    market_id=signal.market_id,
-                    edge=signal.opportunity.edge,
-                    suggested_size=signal.opportunity.suggested_size,
-                )
-            
-            self.dashboard_integration.add_signal(
-                action=signal.action,
-                market_id=signal.market_id,
-            )
-            
-            # Submit to execution
-            asyncio.create_task(self.execution_engine.submit_signal(signal))
+    async def _analyze_worker(self) -> None:
+        """Drain data_feed.next_update() and run analyze + dashboard push.
+
+        Single-consumer with latest-wins coalescing in DataFeed: ordering is
+        preserved per market_id. Do NOT scale to N>1 workers without
+        per-market sharding (hash(market_id) % N).
+        """
+        while self._running:
+            try:
+                market_id, market_state = await self.data_feed.next_update()
+                if market_state is None:
+                    continue
+
+                if not self.risk_manager.within_global_limits():
+                    continue
+
+                signals = self.arb_engine.analyze(market_state)
+                for signal in signals:
+                    if signal.opportunity:
+                        self.dashboard_integration.add_opportunity(
+                            opportunity_type=signal.opportunity.opportunity_type.value,
+                            market_id=signal.market_id,
+                            edge=signal.opportunity.edge,
+                            suggested_size=signal.opportunity.suggested_size,
+                        )
+                    self.dashboard_integration.add_signal(
+                        action=signal.action,
+                        market_id=signal.market_id,
+                    )
+                    asyncio.create_task(self.execution_engine.submit_signal(signal))
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Analyze worker error: {e}")
     
+    async def _latency_dump_loop(self) -> None:
+        """Periodically log latency summary and dump histograms to logs/latency.json."""
+        interval = self.config.monitoring.snapshot_interval
+        while self._running:
+            try:
+                await asyncio.sleep(interval)
+                logger.info(f"Latency | {latency.summary_line()}")
+                try:
+                    latency.dump_json("logs/latency.json")
+                except Exception as e:
+                    logger.warning(f"Latency dump failed: {e}")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Latency loop error: {e}")
+
     async def _simulate_fills(self) -> None:
         """Simulate order fills in dry run mode."""
         import random
@@ -392,10 +424,18 @@ class TradingBotWithDashboard:
         """Stop everything gracefully."""
         logger.info("Shutting down...")
         self._running = False
-        
+
+        # Cancel analyze worker first so it doesn't dequeue from a stopped feed.
+        if self._analyze_worker_task:
+            self._analyze_worker_task.cancel()
+            try:
+                await self._analyze_worker_task
+            except asyncio.CancelledError:
+                pass
+
         if self.dashboard_integration:
             await self.dashboard_integration.stop()
-        
+
         if self.data_feed:
             await self.data_feed.stop()
         

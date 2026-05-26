@@ -8,11 +8,13 @@ Detects trading opportunities including:
 """
 
 import logging
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional
 
+from core import latency
 from polymarket_client.models import (
     MarketState,
     Opportunity,
@@ -117,28 +119,34 @@ class ArbEngine:
     def analyze(self, market_state: MarketState) -> list[Signal]:
         """
         Analyze a market state and generate trading signals.
-        
+
         Returns a list of signals (may be empty if no opportunities).
         """
+        t_in = time.monotonic_ns()
+        recv_ns = market_state.order_book.recv_mono_ns
+        if recv_ns is not None:
+            latency.record("recv_to_analyze_us", (t_in - recv_ns) // 1000)
+
         signals: list[Signal] = []
-        
+
         order_book = market_state.order_book
         market_id = market_state.market.market_id
-        
+
         # Check if previously tracked opportunities have expired
         self._check_expired_opportunities(market_id, order_book)
-        
+
         # Check for bundle arbitrage
         if self.config.bundle_arb_enabled:
             bundle_signal = self._check_bundle_arbitrage(market_id, order_book)
             if bundle_signal:
                 signals.append(bundle_signal)
-        
+
         # Check for market-making opportunities
         if self.config.mm_enabled:
             mm_signals = self._check_market_making(market_id, order_book)
             signals.extend(mm_signals)
-        
+
+        latency.record("analyze_us", (time.monotonic_ns() - t_in) // 1000)
         return signals
     
     def _check_expired_opportunities(self, market_id: str, order_book: OrderBook) -> None:

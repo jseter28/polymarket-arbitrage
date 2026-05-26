@@ -21,6 +21,7 @@ from datetime import datetime
 from typing import Optional
 
 from polymarket_client import PolymarketClient
+from core import latency
 from core.data_feed import DataFeed
 from core.arb_engine import ArbEngine, ArbConfig
 from core.execution import ExecutionEngine, ExecutionConfig
@@ -57,6 +58,9 @@ class TradingBot:
         self._start_time: Optional[datetime] = None
         self._update_count = 0
         self._signal_count = 0
+
+        # Analyze worker task (R2: decouple WS recv from arb_engine.analyze)
+        self._analyze_worker_task: Optional[asyncio.Task] = None
     
     async def start(self) -> None:
         """Initialize and start all components."""
@@ -133,48 +137,64 @@ class TradingBot:
             max_order_size=self.config.trading.max_order_size,
         ))
         
-        # Initialize data feed
+        # Initialize data feed (no on_update callback — we drain via the
+        # analyze queue worker so a slow analyze() can't head-of-line-block
+        # WS reads for other markets).
         market_ids = self.config.trading.markets.copy()
         self.data_feed = DataFeed(
             client=self.client,
             market_ids=market_ids,
             position_refresh_interval=5.0,
-            on_update=self._on_market_update,
             config=self.config,
         )
         await self.data_feed.start()
-        
+
         # Wait for initial data
         logger.info("Waiting for market data...")
         if not await self.data_feed.wait_for_data(timeout=30.0):
             logger.warning("Timeout waiting for initial data, proceeding anyway")
-        
+
         logger.info("Bot started successfully!")
         logger.info("-" * 60)
-        
+
+        # Start analyze worker (drains data_feed.next_update())
+        self._analyze_worker_task = asyncio.create_task(self._analyze_worker())
+
         # Start monitoring loop
         asyncio.create_task(self._monitoring_loop())
-        
+
         # Start fill simulation for dry run
         if self.config.is_dry_run and self.config.mode.simulate_fills:
             asyncio.create_task(self._simulate_fills())
     
-    def _on_market_update(self, market_id: str, market_state) -> None:
-        """Callback for market state updates."""
-        self._update_count += 1
-        
-        # Check risk limits
-        if not self.risk_manager.within_global_limits():
-            logger.warning("Risk limits exceeded, skipping analysis")
-            return
-        
-        # Analyze for opportunities
-        signals = self.arb_engine.analyze(market_state)
-        
-        for signal in signals:
-            self._signal_count += 1
-            # Submit signal asynchronously
-            asyncio.create_task(self.execution_engine.submit_signal(signal))
+    async def _analyze_worker(self) -> None:
+        """Drain data_feed.next_update() and run analyze.
+
+        Single-consumer with latest-wins coalescing in DataFeed: ordering is
+        preserved per market_id, so _check_expired_opportunities sees updates
+        for any one market in temporal order. Do NOT scale to N>1 workers
+        without per-market sharding (hash(market_id) % N) or that invariant
+        breaks.
+        """
+        while self._running:
+            try:
+                market_id, market_state = await self.data_feed.next_update()
+                if market_state is None:
+                    continue
+                self._update_count += 1
+
+                if not self.risk_manager.within_global_limits():
+                    continue
+
+                signals = self.arb_engine.analyze(market_state)
+                for signal in signals:
+                    self._signal_count += 1
+                    asyncio.create_task(self.execution_engine.submit_signal(signal))
+
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Analyze worker error for market {market_id if 'market_id' in dir() else '?'}: {e}")
     
     async def _monitoring_loop(self) -> None:
         """Periodic monitoring and logging."""
@@ -209,7 +229,13 @@ class TradingBot:
                     f"Orders: {exec_stats.orders_placed} placed, {exec_stats.orders_filled} filled | "
                     f"PnL: ${pnl['total_pnl']:.2f}"
                 )
-                
+
+                logger.info(f"Latency | {latency.summary_line()}")
+                try:
+                    latency.dump_json("logs/latency.json")
+                except Exception as e:
+                    logger.warning(f"Latency dump failed: {e}")
+
                 if risk_summary["kill_switch_triggered"]:
                     logger.critical("KILL SWITCH ACTIVE - Trading halted")
                     
@@ -245,7 +271,15 @@ class TradingBot:
         """Stop all components gracefully."""
         logger.info("Shutting down...")
         self._running = False
-        
+
+        # Cancel analyze worker first so it doesn't dequeue from a stopped feed.
+        if self._analyze_worker_task:
+            self._analyze_worker_task.cancel()
+            try:
+                await self._analyze_worker_task
+            except asyncio.CancelledError:
+                pass
+
         if self.data_feed:
             await self.data_feed.stop()
         

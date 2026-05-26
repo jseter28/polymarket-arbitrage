@@ -46,18 +46,28 @@ class DataFeed:
         self.position_refresh_interval = position_refresh_interval
         self.on_update = on_update
         self.config = config
-        
+
         # In-memory state
         self._markets: dict[str, Market] = {}
         self._order_books: dict[str, OrderBook] = {}
         self._positions: dict[str, dict[TokenType, Position]] = {}
         self._market_states: dict[str, MarketState] = {}
-        
+
         # Tasks
         self._orderbook_task: Optional[asyncio.Task] = None
         self._position_task: Optional[asyncio.Task] = None
         self._running = False
-        
+
+        # Analyze queue: producer (_update_market_state) enqueues market_ids;
+        # consumer (await next_update()) dequeues the latest state per market.
+        # Latest-wins coalescing: _pending holds at most one state per market,
+        # _queued tracks which markets currently have an entry in the queue.
+        # With per-market coalescing the queue size is bounded by len(market_ids),
+        # so we leave it unbounded (set() membership keeps it tight).
+        self._analyze_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._pending: dict[str, MarketState] = {}
+        self._queued: set[str] = set()
+
         # Statistics
         self._update_count = 0
         self._last_update: dict[str, datetime] = {}
@@ -203,13 +213,38 @@ class DataFeed:
         )
         
         self._market_states[market_id] = state
-        
-        # Notify callback if set
+
+        # Latest-wins per-market enqueue. A market already in the queue is not
+        # re-enqueued; the consumer picks up whatever is in _pending when it
+        # dequeues the market_id. Stale intermediate states are dropped — fine
+        # for arb detection (only the latest book matters).
+        self._pending[market_id] = state
+        if market_id not in self._queued:
+            try:
+                self._analyze_queue.put_nowait(market_id)
+                self._queued.add(market_id)
+            except asyncio.QueueFull:
+                logger.error(f"Analyze queue full for {market_id} — dropping update")
+
+        # Notify callback if set (legacy, synchronous — not used by the bot
+        # entry points after R2; kept for backward-compat).
         if self.on_update:
             try:
                 self.on_update(market_id, state)
             except Exception as e:
                 logger.error(f"Update callback error for {market_id}: {e}")
+
+    async def next_update(self) -> tuple[str, Optional[MarketState]]:
+        """
+        Wait for the next market update.
+
+        Returns (market_id, state). state is None if the pending entry was
+        cleared between enqueue and dequeue (race — consumer should skip).
+        """
+        market_id = await self._analyze_queue.get()
+        self._queued.discard(market_id)
+        state = self._pending.pop(market_id, None)
+        return market_id, state
     
     def get_market_state(self, market_id: str) -> Optional[MarketState]:
         """
