@@ -403,8 +403,37 @@ DASHBOARD_HTML = r"""<!doctype html>
   .ladder-row .sz { color: inherit; opacity: 0.9; }
   .book-panel .empty { padding: 20px; text-align: center; color: var(--muted); font-style: italic; font-size: 12px; }
 
-  .detail-stats { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 8px 14px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .detail-stats { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 8px 14px; display: flex; gap: 18px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; margin-bottom: 12px; }
   .detail-stats b { color: var(--fg); font-weight: 500; }
+  .detail-stats .spark-wrap { display: inline-flex; align-items: center; gap: 6px; }
+  .msg-sparkline { display: inline-block; vertical-align: middle; background: var(--bg3); border-radius: 2px; }
+
+  /* Tag chips as links */
+  a.tag-chip { text-decoration: none; }
+  a.tag-chip:hover { background: var(--accent); color: var(--bg); }
+
+  /* Recent events panel in drill-in */
+  .events-panel { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; padding: 10px 0 0 0; }
+  .events-panel h3 { margin: 0 0 6px 14px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+  .events-list { list-style: none; margin: 0; padding: 0; max-height: 280px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+  .events-list li { padding: 3px 14px; border-top: 1px solid var(--bg3); display: grid; grid-template-columns: 70px 38px 50px 60px 1fr; gap: 8px; align-items: baseline; }
+  .events-list li:first-child { border-top: none; }
+  .events-list li.bid { color: #4ade80; }
+  .events-list li.ask { color: #ef4444; }
+  .events-list li.snap { color: var(--accent); }
+  .events-list li .ev-t { color: var(--muted); }
+  .events-list li .ev-tok { font-weight: 500; }
+  .events-list li .ev-side { text-transform: lowercase; opacity: 0.8; }
+  .events-list li .ev-px { color: var(--fg); font-weight: 500; }
+  .events-list li .ev-sz { color: inherit; opacity: 0.85; }
+  .events-list .empty { padding: 12px 14px; color: var(--muted); font-style: italic; font-family: inherit; }
+
+  /* Sortable grid headers */
+  #markets-table th.sortable { cursor: pointer; user-select: none; }
+  #markets-table th.sortable:hover { color: var(--fg); }
+  #markets-table th.sortable.active { color: var(--accent); }
+  #markets-table th .sort-arrow { display: inline-block; width: 10px; opacity: 0.5; }
+  #markets-table th.active .sort-arrow { opacity: 1; }
 </style>
 </head>
 <body>
@@ -483,10 +512,11 @@ DASHBOARD_HTML = r"""<!doctype html>
             <th class="num">YES</th>
             <th class="num">NO</th>
             <th class="num">spread</th>
-            <th class="num">vol 24h</th>
-            <th class="num">last upd</th>
+            <th class="num sortable" data-sort="volume">vol 24h<span class="sort-arrow"></span></th>
+            <th class="num sortable" data-sort="msg_rate">msg/s<span class="sort-arrow"></span></th>
+            <th class="num sortable" data-sort="last_update">last upd<span class="sort-arrow"></span></th>
           </tr></thead>
-          <tbody><tr><td colspan="6" class="empty">pick a category</td></tr></tbody>
+          <tbody><tr><td colspan="7" class="empty">pick a category</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -517,9 +547,16 @@ DASHBOARD_HTML = r"""<!doctype html>
         <span>YES spread: <b id="detail-yes-spread">—</b></span>
         <span>NO spread: <b id="detail-no-spread">—</b></span>
         <span>implied: <b id="detail-implied">—</b></span>
-        <span>msg rate (60s): <b id="detail-msgrate">0.0</b> /s</span>
+        <span class="spark-wrap">
+          msg rate (60s): <b id="detail-msgrate">0.0</b> /s
+          <svg class="msg-sparkline" id="msg-sparkline" width="120" height="18"></svg>
+        </span>
         <span>last msg: <b id="detail-lastmsg">—</b></span>
         <span>total msgs: <b id="detail-totalmsgs">0</b></span>
+      </div>
+      <div class="events-panel">
+        <h3>Recent events (last 20)</h3>
+        <ul class="events-list" id="detail-events"><li class="empty">waiting for first frame…</li></ul>
       </div>
     </div>
   </main>
@@ -803,8 +840,9 @@ function renderMarkets(rows, total) {
   const tbody = document.querySelector('#markets-table tbody');
   const meta = document.getElementById('grid-meta');
   meta.textContent = `${total} market${total === 1 ? '' : 's'} · sorted by ${gridSort}`;
+  updateSortHeaders();
   if (rows.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty">no markets in this category yet</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">no markets in this category yet</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(r => {
@@ -813,6 +851,9 @@ function renderMarkets(rows, total) {
     const no  = fmtPx(r.no_bid, r.no_ask);
     const spread = r.spread != null ? r.spread.toFixed(3) : '<span class="nobook">—</span>';
     const vol = fmtMoney(r.volume_24h);
+    const rate = (r.msg_rate_1min != null && r.msg_rate_1min > 0)
+      ? r.msg_rate_1min.toFixed(1)
+      : '<span class="nobook">—</span>';
     const age = r.last_msg_age_s == null ? '<span class="nobook">—</span>' : fmtAge(r.last_msg_age_s);
     return `<tr class="clickable${stale}" data-market-id="${escapeAttr(r.market_id)}">
       <td class="q" title="${escapeAttr(r.question)}">${escapeHtml(r.question)}</td>
@@ -820,10 +861,34 @@ function renderMarkets(rows, total) {
       <td class="num">${no}</td>
       <td class="num">${spread}</td>
       <td class="num">${vol}</td>
+      <td class="num">${rate}</td>
       <td class="num">${age}</td>
     </tr>`;
   }).join('');
 }
+
+function updateSortHeaders() {
+  document.querySelectorAll('#markets-table th.sortable').forEach(th => {
+    const active = th.dataset.sort === gridSort;
+    th.classList.toggle('active', active);
+    const arrow = th.querySelector('.sort-arrow');
+    if (arrow) {
+      // last_update sorts ascending (freshest first); others descending.
+      const desc = (gridSort !== 'last_update');
+      arrow.textContent = active ? (desc ? ' ▼' : ' ▲') : '';
+    }
+  });
+}
+
+// Click-to-sort on column headers
+document.addEventListener('click', (e) => {
+  const th = e.target.closest('#markets-table th.sortable');
+  if (!th) return;
+  const newSort = th.dataset.sort;
+  if (newSort === gridSort) return;
+  gridSort = newSort;
+  loadMarkets();
+});
 
 // Event-delegation: any click on a grid row navigates to that market's drill-in.
 document.addEventListener('click', (e) => {
@@ -945,6 +1010,91 @@ let detailNoBook = null;
 let detailMsgCount = 0;
 let detailRenderTimer = null;
 
+// Recent-events tail and msg/sec sparkline. Both are reset on enterDetail().
+const EVENTS_MAX = 20;
+const SPARK_BUCKETS = 60;  // seconds
+let detailEvents = [];
+let sparkBuckets = new Array(SPARK_BUCKETS).fill(0);
+let sparkSecond = Math.floor(Date.now() / 1000);
+
+function sparkAdvance() {
+  // Roll the ring buffer forward so the rightmost bucket is "now".
+  const nowSec = Math.floor(Date.now() / 1000);
+  const advance = Math.min(SPARK_BUCKETS, nowSec - sparkSecond);
+  for (let i = 0; i < advance; i++) {
+    sparkBuckets.shift();
+    sparkBuckets.push(0);
+  }
+  sparkSecond = nowSec;
+}
+
+function sparkRecord() {
+  sparkAdvance();
+  sparkBuckets[SPARK_BUCKETS - 1]++;
+}
+
+function renderSpark() {
+  sparkAdvance();
+  const svg = document.getElementById('msg-sparkline');
+  if (!svg) return;
+  const W = svg.clientWidth || 120, H = svg.clientHeight || 18;
+  const max = Math.max(1, ...sparkBuckets);
+  const bw = W / SPARK_BUCKETS;
+  let bars = '';
+  for (let i = 0; i < SPARK_BUCKETS; i++) {
+    const v = sparkBuckets[i];
+    if (v === 0) continue;
+    const h = Math.max(1, (v / max) * H);
+    bars += `<rect x="${(i * bw).toFixed(2)}" y="${(H - h).toFixed(2)}" width="${Math.max(0.5, bw - 0.5).toFixed(2)}" height="${h.toFixed(2)}" fill="#2dd4bf"/>`;
+  }
+  svg.innerHTML = bars;
+}
+
+function pushEvent(ev) {
+  // Newest at index 0; cap length.
+  detailEvents.unshift(ev);
+  if (detailEvents.length > EVENTS_MAX) detailEvents.length = EVENTS_MAX;
+  renderEventsList();
+}
+
+function renderEventsList() {
+  const ul = document.getElementById('detail-events');
+  if (!ul) return;
+  if (detailEvents.length === 0) {
+    ul.innerHTML = '<li class="empty">waiting for first frame…</li>';
+    return;
+  }
+  const now = Date.now() / 1000;
+  ul.innerHTML = detailEvents.map(ev => {
+    const ageS = ev.ts != null ? Math.max(0, now - ev.ts) : null;
+    const tStr = ageS == null ? '—' : (ageS < 60 ? `${ageS.toFixed(1)}s ago` : fmtAge(ageS) + ' ago');
+    if (ev.type === 'price_change') {
+      const cls = ev.side === 'BUY' ? 'bid' : 'ask';
+      const sideLbl = ev.side === 'BUY' ? 'bid' : 'ask';
+      const px = (ev.price ?? 0).toFixed(3);
+      const sz = ev.size === 0 ? '(removed)' : fmtSize(ev.size);
+      return `<li class="${cls}">
+        <span class="ev-t">${tStr}</span>
+        <span class="ev-tok">${ev.token}</span>
+        <span class="ev-side">${sideLbl}</span>
+        <span class="ev-px">${px}</span>
+        <span class="ev-sz">${sz}</span>
+      </li>`;
+    }
+    if (ev.type === 'book_update') {
+      const nb = (ev.bids || []).length, na = (ev.asks || []).length;
+      return `<li class="snap">
+        <span class="ev-t">${tStr}</span>
+        <span class="ev-tok">${ev.token}</span>
+        <span class="ev-side">snap</span>
+        <span class="ev-px">—</span>
+        <span class="ev-sz">${nb}b / ${na}a</span>
+      </li>`;
+    }
+    return '';
+  }).join('');
+}
+
 function enterDetail(marketId) {
   if (activeMarketSub === marketId) {
     // Already showing this market — just make sure the pane is visible.
@@ -957,6 +1107,9 @@ function enterDetail(marketId) {
   detailYesBook = null;
   detailNoBook = null;
   detailMsgCount = 0;
+  detailEvents = [];
+  sparkBuckets = new Array(SPARK_BUCKETS).fill(0);
+  sparkSecond = Math.floor(Date.now() / 1000);
 
   document.getElementById('detail-question').textContent = 'loading…';
   document.getElementById('detail-end').textContent = '';
@@ -970,6 +1123,8 @@ function enterDetail(marketId) {
   document.getElementById('detail-msgrate').textContent = '0.0';
   document.getElementById('detail-lastmsg').textContent = '—';
   document.getElementById('detail-totalmsgs').textContent = '0';
+  renderEventsList();
+  renderSpark();
 
   wsEnsureOpen();
   if (wsState === 'open') wsSend({op: 'subscribe', market_id: marketId});
@@ -977,8 +1132,11 @@ function enterDetail(marketId) {
 
   stopGridPolling();
   if (detailRenderTimer) clearInterval(detailRenderTimer);
-  // Re-paint stats once per second so msg rate / last-msg-age tick visibly.
-  detailRenderTimer = setInterval(updateDetailStats, 1000);
+  // Re-paint time-relative widgets (events ages, sparkline ring buffer) every second.
+  detailRenderTimer = setInterval(() => {
+    renderSpark();
+    renderEventsList();
+  }, 1000);
 }
 
 function leaveDetail() {
@@ -1001,7 +1159,7 @@ function renderDetailSnapshot(marketId, data) {
 
   const tags = (data.tags || []).slice(0, 6);
   document.getElementById('detail-tags').innerHTML = tags.map(t =>
-    `<span class="tag-chip">${escapeHtml(t.label)}</span>`
+    `<a class="tag-chip" href="#cat/${encodeURIComponent(t.slug)}">${escapeHtml(t.label)}</a>`
   ).join(' ');
 
   document.getElementById('detail-vol').textContent = fmtMoney(data.volume_24h);
@@ -1010,6 +1168,11 @@ function renderDetailSnapshot(marketId, data) {
   detailYesBook = data.yes_book ? cloneBook(data.yes_book) : {bids: [], asks: []};
   detailNoBook = data.no_book ? cloneBook(data.no_book) : {bids: [], asks: []};
   detailMsgCount = data.total_messages || 0;
+
+  // Bootstrap recent-events panel: server's deque is oldest→newest, panel is
+  // newest→oldest, so reverse.
+  detailEvents = (data.recent_events || []).slice(-EVENTS_MAX).reverse();
+  renderEventsList();
 
   renderBooks();
   updateDetailStats(data);
@@ -1031,6 +1194,8 @@ function applyBookUpdate(msg) {
   if (msg.token === 'YES') detailYesBook = book;
   else if (msg.token === 'NO') detailNoBook = book;
   detailMsgCount++;
+  sparkRecord();
+  pushEvent(msg);
   renderBooks();
 }
 
@@ -1053,6 +1218,8 @@ function applyPriceChange(msg) {
   if (side === 'bids') levels.sort((a, b) => b.price - a.price);
   else levels.sort((a, b) => a.price - b.price);
   detailMsgCount++;
+  sparkRecord();
+  pushEvent(msg);
   renderBooks();
 }
 

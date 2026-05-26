@@ -857,6 +857,7 @@ class PolymarketUniversalWS:
             "token": token_type.value.upper(),  # "YES" / "NO"
             "bids": [{"price": l.price, "size": l.size} for l in bids],
             "asks": [{"price": l.price, "size": l.size} for l in asks],
+            "ts": time.time(),
         }
         self._record_market_event(market_id, fanout_event)
         self._fanout(market_id, fanout_event)
@@ -911,6 +912,7 @@ class PolymarketUniversalWS:
                 "side": side_str,
                 "price": price,
                 "size": size,
+                "ts": time.time(),
             }
             self._record_market_event(market_id, fanout_event)
             self._fanout(market_id, fanout_event)
