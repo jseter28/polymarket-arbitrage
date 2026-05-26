@@ -22,6 +22,13 @@ python main.py --backtest --backtest-duration 300
 python test_connection.py -c config.live.yaml   # verifies API creds + Gamma reachability
 python test_real_data.py                        # fetches a live order book end-to-end
 
+# Universal WS soak + markets-view dashboard (separate from bot dashboard)
+python probe_universal_ws_dashboard.py --duration 86400 \
+    --output probe_universal_24h.json --port 8889
+# Short stability / sharding checks
+python probe_ws_stability.py
+python probe_ws_sharded.py
+
 # Tests
 pytest tests/ -v
 pytest tests/test_arb_engine.py -v
@@ -82,6 +89,25 @@ These are independent: you can `live` + `simulation` (don't), or `dry_run` + `re
 
 `dashboard/server.py` is a single ~2,400-line file holding the FastAPI app, embedded HTML/JS, and a module-level `dashboard_state` object. `dashboard/integration.py` defines `DashboardIntegration`, which the bot pushes updates into (opportunities found, orders placed, PnL snapshots). The FastAPI server runs in a `threading.Thread` from `run_with_dashboard.py`; the bot itself stays on the main asyncio loop. Don't `await` dashboard calls from the bot — they're sync push, not coroutine.
 
+### Two independent dashboards
+
+There are two FastAPI dashboards in this repo and they are **not** the same process:
+
+| Port | Entry point | What it shows |
+|---|---|---|
+| **8888** | `run_with_dashboard.py` → `dashboard/server.py` | The bot itself: opportunities, orders, PnL, RiskManager state. Pushed into via `DashboardIntegration`. |
+| **8889** | `probe_universal_ws_dashboard.py` (standalone, no bot) | Universal-WS soak telemetry + the **markets-view** SPA: `#status`, `#markets`, `#market/<id>`. Talks directly to `PolymarketUniversalWS`. |
+
+Don't conflate them. The markets-view work (commits `67b034e` → `de08684`, plan in `polymarket-ws-markets-view-plan.md`) lives entirely in the 8889 probe dashboard, not in `dashboard/server.py`.
+
+### Universal WS ingest (sharded, decoupled)
+
+`polymarket_client/universal_ws.py` is a **separate** ingest layer from `DataFeed` — it is not wired into the bot's signal pipeline. It exists to sustain a connection to the full Polymarket universe (~5000 markets / ~10000 tokens) by **sharding** across many concurrent WebSocket connections, working around Polymarket's undocumented ~500-instrument per-connection cap.
+
+- Public surface: `PolymarketUniversalWS().start() / iter_updates() / get_book() / status() / stop()`.
+- The constraint is per-connection instrument count, **not** rate — don't add throttling speculatively.
+- Consumers today: only `probe_universal_ws_dashboard.py` and the `probe_*` scripts. Integrating it into `DataFeed` is an explicit downstream task, not done.
+
 ### Config flow
 
 `utils/config_loader.load_config(path)` → validated `BotConfig` dataclass tree (`api`, `trading`, `risk`, `mode`, `logging`, `monitoring`). `validate_config()` (called from `load_config`) hard-fails when `trading_mode: live` and `api_key`/`private_key` are still the placeholder strings — this is the guardrail against accidental live trading with a half-edited config. Sensitive overrides go in `config.live.yaml` (gitignored).
@@ -94,3 +120,4 @@ These are independent: you can `live` + `simulation` (don't), or `dry_run` + `re
 - **Polymarket markets are referenced by two IDs**: the Gamma `market_id` (used for discovery / order book lookup) and the per-token `yes_token_id` / `no_token_id` (used at the CLOB layer). `test_real_data.py` shows the round-trip; preserve both when adding handling for new markets.
 - **Kalshi public data needs no auth** (see `kalshi_client/api.py`); only Polymarket trading requires `api_key` + `private_key`. Don't add Kalshi auth flows speculatively.
 - **Dry-run logs and trades look real.** Always check `config.mode.trading_mode` / startup banner before assuming a session is paper or live.
+- **The `probe_*.py` files are experimental harnesses**, not production code paths. They generate the `probe_*.json` / `probe_*.log` snapshots at the repo root. Don't refactor them into core unless that's the explicit task.
