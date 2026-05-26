@@ -338,7 +338,10 @@ DASHBOARD_HTML = r"""<!doctype html>
   .topbar .clock b { color: var(--fg); font-weight: 500; }
 
   /* ---------- Markets view layout ---------- */
-  #view-markets { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
+  /* :not(.hidden) is required — the bare #view-markets selector has higher
+     specificity than .hidden, so without it the grid display wins and the
+     markets view leaks onto the #status page underneath the Events list. */
+  #view-markets:not(.hidden) { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
   .sidebar {
     background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px;
     padding: 10px 0; max-height: calc(100vh - 110px); overflow-y: auto;
