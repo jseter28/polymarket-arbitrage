@@ -7,6 +7,7 @@ Designed to be easily pluggable with real API implementations.
 """
 
 import asyncio
+import copy
 import json
 import logging
 import time
@@ -116,6 +117,8 @@ class PolymarketClient(BasePolymarketClient):
         max_retries: int = 3,
         retry_delay: float = 1.0,
         dry_run: bool = True,
+        use_websocket: bool = True,
+        max_subscribed_markets: int = 750,
     ):
         self.rest_url = rest_url.rstrip("/")
         self.ws_url = ws_url
@@ -128,19 +131,22 @@ class PolymarketClient(BasePolymarketClient):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.dry_run = dry_run
-        
+        self.use_websocket = use_websocket
+        self.max_subscribed_markets = max_subscribed_markets
+
         # HTTP client
         self._http_client: Optional[httpx.AsyncClient] = None
-        
-        # WebSocket connection
+
+        # WebSocket state
         self._ws_connection = None
-        self._ws_subscriptions: set[str] = set()
-        
+        self._token_to_market: dict[str, tuple[str, TokenType]] = {}
+        self._ws_combined_books: dict[str, OrderBook] = {}
+
         # Simulated state for dry run
         self._simulated_orders: dict[str, Order] = {}
         self._simulated_positions: dict[str, dict[TokenType, Position]] = {}
         self._simulated_trades: list[Trade] = []
-        
+
         # Cache for market data (avoids re-fetching)
         self._markets_cache: dict[str, Market] = {}
         
@@ -581,18 +587,35 @@ class PolymarketClient(BasePolymarketClient):
     
     async def stream_orderbook(self, market_ids: list[str], use_simulation: bool = False) -> AsyncIterator[tuple[str, OrderBook]]:
         """
-        Stream order book updates.
-        
-        If use_simulation=True, generates simulated data with opportunities.
-        Otherwise fetches REAL data from Polymarket CLOB API.
+        Stream order book updates. Dispatches between:
+          - simulation       (use_simulation=True)
+          - WebSocket        (self.use_websocket=True, falls back to REST on failure)
+          - REST polling     (default fallback)
         """
         if use_simulation:
             async for item in self._stream_simulated_orderbooks(market_ids):
                 yield item
             return
-        
-        logger.info(f"Starting REAL orderbook stream for {len(market_ids)} markets")
-        
+
+        if self.use_websocket:
+            try:
+                async for item in self._stream_websocket_orderbooks(market_ids):
+                    yield item
+                # WS exited cleanly (unexpected for a streaming source) — fall through
+                logger.warning("WS stream exited without error; falling back to REST polling")
+            except Exception as e:
+                logger.warning(
+                    f"WS stream failed ({type(e).__name__}: {e}); falling back to REST polling"
+                )
+            # Fall through to REST below for the rest of the session.
+
+        async for item in self._stream_rest_orderbooks(market_ids):
+            yield item
+
+    async def _stream_rest_orderbooks(self, market_ids: list[str]) -> AsyncIterator[tuple[str, OrderBook]]:
+        """REST polling fallback. Original behavior, preserved verbatim."""
+        logger.info(f"Starting REST orderbook stream for {len(market_ids)} markets")
+
         # We already have token IDs in the cached markets - use them directly!
         # Build token map from cached market data (no extra API calls needed)
         market_tokens: dict[str, tuple[str, str]] = {}
@@ -698,34 +721,220 @@ class PolymarketClient(BasePolymarketClient):
             logger.info("Simulated orderbook stream cancelled")
             raise
 
-    async def _connect_websocket(self, market_ids: list[str]) -> None:
-        """
-        Connect to Polymarket WebSocket.
-        
-        TODO: Implement actual WebSocket connection and subscription.
-        """
-        try:
-            self._ws_connection = await websockets.connect(
-                self.ws_url,
-                ping_interval=30,
-                ping_timeout=10,
+    # ------------------------------------------------------------------
+    # WebSocket order-book streaming
+    #
+    # Subscribes to Polymarket's public CLOB WS channel for a curated set
+    # of markets (top N by 24h volume, capped at self.max_subscribed_markets).
+    # Maintains an in-memory OrderBook per market and yields snapshots as
+    # `book` snapshots and `price_change` deltas arrive.
+    #
+    # Stability bound: probe runs show the channel is stable up to ~2000
+    # markets (4000 tokens) and breaks above that. Keep the cap conservative.
+    # ------------------------------------------------------------------
+
+    def _select_top_subscribed_markets(self, market_ids: list[str]) -> list[str]:
+        """Return up to max_subscribed_markets, sorted by 24h volume desc."""
+        candidates: list[Market] = []
+        for mid in market_ids:
+            m = self._markets_cache.get(mid)
+            if not m or not m.yes_token_id or not m.no_token_id:
+                continue
+            candidates.append(m)
+        candidates.sort(key=lambda m: m.volume_24h or 0.0, reverse=True)
+        capped = candidates[: self.max_subscribed_markets]
+        dropped = len(candidates) - len(capped)
+        if dropped > 0:
+            cutoff = capped[-1].volume_24h if capped else 0.0
+            logger.info(
+                f"WS subscription cap: keeping top {len(capped)} markets by 24h volume, "
+                f"dropping {dropped} below cutoff (vol={cutoff:.0f})"
             )
-            
-            # Subscribe to markets
-            for market_id in market_ids:
-                subscribe_msg = json.dumps({
-                    "type": "subscribe",
-                    "market": market_id,
-                    "channel": "book",
-                })
-                await self._ws_connection.send(subscribe_msg)
-                self._ws_subscriptions.add(market_id)
-            
-            logger.info(f"WebSocket connected, subscribed to {len(market_ids)} markets")
-            
-        except Exception as e:
-            logger.error(f"WebSocket connection failed: {e}")
+        return [m.market_id for m in capped]
+
+    async def _open_ws_with_subscription(self, market_ids: list[str]):
+        """Open WS, send the single subscribe frame, return the live connection."""
+        self._token_to_market = {}
+        assets_ids: list[str] = []
+        for mid in market_ids:
+            m = self._markets_cache.get(mid)
+            if not m:
+                continue
+            assets_ids.append(m.yes_token_id)
+            assets_ids.append(m.no_token_id)
+            self._token_to_market[m.yes_token_id] = (mid, TokenType.YES)
+            self._token_to_market[m.no_token_id] = (mid, TokenType.NO)
+
+        ws = await websockets.connect(
+            self.ws_url,
+            ping_interval=None,    # Polymarket uses app-level PING strings
+            ping_timeout=None,
+            close_timeout=5,
+            max_size=None,
+            open_timeout=15,
+        )
+        await ws.send(json.dumps({"assets_ids": assets_ids, "type": "market"}))
+        logger.info(
+            f"WS connected: subscribed to {len(assets_ids)} tokens "
+            f"({len(market_ids)} markets)"
+        )
+        self._ws_connection = ws
+        return ws
+
+    async def _ws_heartbeat(self, ws, stop: asyncio.Event) -> None:
+        """Send app-level PING every 10s until stop is set or send fails."""
+        try:
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=10.0)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    await ws.send("PING")
+                except Exception:
+                    return
+        except asyncio.CancelledError:
             raise
+
+    def _apply_book_snapshot(self, msg: dict) -> Optional[str]:
+        """Apply a 'book' snapshot. Returns market_id if a known asset, else None."""
+        asset_id = msg.get("asset_id")
+        if not asset_id or asset_id not in self._token_to_market:
+            return None
+        market_id, token_type = self._token_to_market[asset_id]
+
+        def to_levels(raw) -> list[PriceLevel]:
+            out: list[PriceLevel] = []
+            for item in raw or []:
+                try:
+                    out.append(PriceLevel(price=float(item["price"]), size=float(item["size"])))
+                except (KeyError, ValueError, TypeError):
+                    continue
+            return out
+
+        bids = to_levels(msg.get("bids"))
+        asks = to_levels(msg.get("asks"))
+        bids.sort(key=lambda l: l.price, reverse=True)
+        asks.sort(key=lambda l: l.price)
+
+        token_book = TokenOrderBook(
+            token_type=token_type,
+            bids=OrderBookSide(levels=bids),
+            asks=OrderBookSide(levels=asks),
+            last_update=datetime.utcnow(),
+        )
+
+        combined = self._ws_combined_books.get(market_id)
+        if combined is None:
+            combined = OrderBook(market_id=market_id)
+            self._ws_combined_books[market_id] = combined
+        if token_type == TokenType.YES:
+            combined.yes = token_book
+        else:
+            combined.no = token_book
+        combined.timestamp = datetime.utcnow()
+        return market_id
+
+    def _apply_price_change(self, msg: dict) -> set[str]:
+        """Apply a 'price_change' delta. Returns set of touched market_ids."""
+        changes = msg.get("price_changes") or msg.get("changes") or []
+        touched: set[str] = set()
+        for entry in changes:
+            asset_id = entry.get("asset_id")
+            if not asset_id or asset_id not in self._token_to_market:
+                continue
+            market_id, token_type = self._token_to_market[asset_id]
+            combined = self._ws_combined_books.get(market_id)
+            if combined is None:
+                # Delta arrived before snapshot — ignore until snapshot lands
+                continue
+            token_book = combined.yes if token_type == TokenType.YES else combined.no
+            side_str = (entry.get("side") or "").upper()
+            is_bid = side_str == "BUY"
+            levels = token_book.bids.levels if is_bid else token_book.asks.levels
+            try:
+                price = float(entry["price"])
+                size = float(entry["size"])
+            except (KeyError, ValueError, TypeError):
+                continue
+
+            for i, lvl in enumerate(levels):
+                if lvl.price == price:
+                    if size == 0:
+                        levels.pop(i)
+                    else:
+                        levels[i] = PriceLevel(price=price, size=size)
+                    break
+            else:
+                if size > 0:
+                    levels.append(PriceLevel(price=price, size=size))
+
+            if is_bid:
+                levels.sort(key=lambda l: l.price, reverse=True)
+            else:
+                levels.sort(key=lambda l: l.price)
+            token_book.last_update = datetime.utcnow()
+            combined.timestamp = datetime.utcnow()
+            touched.add(market_id)
+        return touched
+
+    def _snapshot_orderbook(self, market_id: str) -> OrderBook:
+        """Deep copy so consumers can't mutate internal WS state."""
+        return copy.deepcopy(self._ws_combined_books[market_id])
+
+    async def _stream_websocket_orderbooks(
+        self, market_ids: list[str]
+    ) -> AsyncIterator[tuple[str, OrderBook]]:
+        """
+        WS-driven order book stream. Yields (market_id, OrderBook) on every
+        book snapshot or price_change. Raises on disconnect — the public
+        stream_orderbook dispatcher catches and falls back to REST.
+        """
+        subscribed = self._select_top_subscribed_markets(market_ids)
+        if not subscribed:
+            raise RuntimeError("WS: no markets with valid yes/no token IDs")
+
+        ws = await self._open_ws_with_subscription(subscribed)
+        stop = asyncio.Event()
+        hb = asyncio.create_task(self._ws_heartbeat(ws, stop))
+
+        try:
+            async for raw in ws:
+                if isinstance(raw, (bytes, bytearray)):
+                    raw = raw.decode("utf-8", errors="replace")
+                if raw.strip() == "PONG":
+                    continue
+                try:
+                    data = json.loads(raw)
+                except json.JSONDecodeError:
+                    continue
+
+                messages = data if isinstance(data, list) else [data]
+                for msg in messages:
+                    if not isinstance(msg, dict):
+                        continue
+                    et = msg.get("event_type")
+                    if et == "book":
+                        mid = self._apply_book_snapshot(msg)
+                        if mid:
+                            yield (mid, self._snapshot_orderbook(mid))
+                    elif et == "price_change":
+                        for mid in self._apply_price_change(msg):
+                            yield (mid, self._snapshot_orderbook(mid))
+                    # Other event types (last_trade_price, tick_size_change) ignored
+        finally:
+            stop.set()
+            hb.cancel()
+            try:
+                await hb
+            except (asyncio.CancelledError, Exception):
+                pass
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            self._ws_connection = None
     
     async def get_positions(self) -> dict[str, dict[TokenType, Position]]:
         """

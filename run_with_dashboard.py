@@ -88,6 +88,8 @@ class TradingBotWithDashboard:
             private_key=self.config.api.private_key,
             timeout=self.config.api.timeout_seconds,
             dry_run=self.config.is_dry_run,
+            use_websocket=self.config.mode.use_websocket,
+            max_subscribed_markets=self.config.mode.max_subscribed_markets,
         )
         await self.client.connect()
         

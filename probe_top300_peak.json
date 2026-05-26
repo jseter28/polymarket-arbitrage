@@ -1,0 +1,71 @@
+{
+  "probe": {
+    "tokens_subscribed": 600,
+    "markets_subscribed": 300,
+    "target_duration_s": 300,
+    "actual_duration_s": 310.01,
+    "start_wall_utc": "2026-05-23T23:32:57+00:00",
+    "end_wall_utc": "2026-05-23T23:38:07+00:00",
+    "stale_timeout_s": 45.0
+  },
+  "connections": {
+    "attempts": 2,
+    "successes": 2,
+    "open_failures": 0,
+    "sessions_ended": 2
+  },
+  "uptime_seconds": {
+    "count": 2,
+    "mean": 149.5,
+    "median": 149.5,
+    "p10": 105.83,
+    "p90": 193.17,
+    "min": 94.91,
+    "max": 204.09,
+    "all": [
+      204.09,
+      94.91
+    ]
+  },
+  "session_reasons": [
+    "ConnectionClosed code=1006: no close frame received or sent",
+    "deadline_reached"
+  ],
+  "open_failure_reasons": [],
+  "messages_by_type": {
+    "book": 3456,
+    "price_change": 186373,
+    "last_trade_price": 1096,
+    "PONG": 26
+  },
+  "total_bytes_received": 122024909,
+  "first_message_latency_ms": {
+    "count": 2,
+    "values": [
+      1221.6,
+      1205.7
+    ]
+  },
+  "top_markets_sample": [
+    {
+      "q": "Will the Iran ceasefire continue through May 22?",
+      "vol24h": 7357942.0
+    },
+    {
+      "q": "Will Bitcoin hit $150k by June 30, 2026?",
+      "vol24h": 5821653.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 31, 2026?",
+      "vol24h": 5767659.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 26, 2026?",
+      "vol24h": 4097831.0
+    },
+    {
+      "q": "Iran closes its airspace by May 24?",
+      "vol24h": 3861491.0
+    }
+  ]
+}

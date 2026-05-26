@@ -1,0 +1,69 @@
+{
+  "probe": {
+    "tokens_subscribed": 1000,
+    "markets_subscribed": 500,
+    "target_duration_s": 600,
+    "actual_duration_s": 605.0,
+    "start_wall_utc": "2026-05-23T03:59:09+00:00",
+    "end_wall_utc": "2026-05-23T04:09:14+00:00",
+    "stale_timeout_s": 45.0
+  },
+  "connections": {
+    "attempts": 1,
+    "successes": 1,
+    "open_failures": 0,
+    "sessions_ended": 1
+  },
+  "uptime_seconds": {
+    "count": 1,
+    "mean": 600.0,
+    "median": 600.0,
+    "p10": 600.0,
+    "p90": 600.0,
+    "min": 600.0,
+    "max": 600.0,
+    "all": [
+      600.0
+    ]
+  },
+  "session_reasons": [
+    "deadline_reached"
+  ],
+  "open_failure_reasons": [],
+  "messages_by_type": {
+    "price_change": 221766,
+    "book": 3134,
+    "last_trade_price": 1545,
+    "PONG": 59,
+    "tick_size_change": 8
+  },
+  "total_bytes_received": 142480467,
+  "first_message_latency_ms": {
+    "count": 1,
+    "values": [
+      482.8
+    ]
+  },
+  "top_markets_sample": [
+    {
+      "q": "Thunder vs. Spurs",
+      "vol24h": 11834602.0
+    },
+    {
+      "q": "Will Bitcoin hit $150k by June 30, 2026?",
+      "vol24h": 5821653.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 31, 2026?",
+      "vol24h": 4307228.0
+    },
+    {
+      "q": "Will Uzbekistan win the 2026 FIFA World Cup?",
+      "vol24h": 4035014.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 22, 2026?",
+      "vol24h": 3468866.0
+    }
+  ]
+}

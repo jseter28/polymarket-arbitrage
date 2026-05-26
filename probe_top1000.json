@@ -1,0 +1,69 @@
+{
+  "probe": {
+    "tokens_subscribed": 2000,
+    "markets_subscribed": 1000,
+    "target_duration_s": 600,
+    "actual_duration_s": 605.0,
+    "start_wall_utc": "2026-05-23T04:31:54+00:00",
+    "end_wall_utc": "2026-05-23T04:41:59+00:00",
+    "stale_timeout_s": 45.0
+  },
+  "connections": {
+    "attempts": 1,
+    "successes": 1,
+    "open_failures": 0,
+    "sessions_ended": 1
+  },
+  "uptime_seconds": {
+    "count": 1,
+    "mean": 600.0,
+    "median": 600.0,
+    "p10": 600.0,
+    "p90": 600.0,
+    "min": 600.0,
+    "max": 600.0,
+    "all": [
+      600.0
+    ]
+  },
+  "session_reasons": [
+    "deadline_reached"
+  ],
+  "open_failure_reasons": [],
+  "messages_by_type": {
+    "price_change": 453782,
+    "book": 5078,
+    "last_trade_price": 2516,
+    "PONG": 59,
+    "tick_size_change": 4
+  },
+  "total_bytes_received": 286879895,
+  "first_message_latency_ms": {
+    "count": 1,
+    "values": [
+      759.6
+    ]
+  },
+  "top_markets_sample": [
+    {
+      "q": "Will Bitcoin hit $150k by June 30, 2026?",
+      "vol24h": 5821653.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 31, 2026?",
+      "vol24h": 4292223.0
+    },
+    {
+      "q": "Will Uzbekistan win the 2026 FIFA World Cup?",
+      "vol24h": 4034251.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 22, 2026?",
+      "vol24h": 3608877.0
+    },
+    {
+      "q": "Will Panama win the 2026 FIFA World Cup?",
+      "vol24h": 3249738.0
+    }
+  ]
+}

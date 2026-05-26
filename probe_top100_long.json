@@ -1,0 +1,68 @@
+{
+  "probe": {
+    "tokens_subscribed": 200,
+    "markets_subscribed": 100,
+    "target_duration_s": 900,
+    "actual_duration_s": 900.12,
+    "start_wall_utc": "2026-05-26T02:15:50+00:00",
+    "end_wall_utc": "2026-05-26T02:30:50+00:00",
+    "stale_timeout_s": 45.0
+  },
+  "connections": {
+    "attempts": 1,
+    "successes": 1,
+    "open_failures": 0,
+    "sessions_ended": 1
+  },
+  "uptime_seconds": {
+    "count": 1,
+    "mean": 900.0,
+    "median": 900.0,
+    "p10": 900.0,
+    "p90": 900.0,
+    "min": 900.0,
+    "max": 900.0,
+    "all": [
+      900.0
+    ]
+  },
+  "session_reasons": [
+    "deadline_reached"
+  ],
+  "open_failure_reasons": [],
+  "messages_by_type": {
+    "book": 4978,
+    "price_change": 433225,
+    "last_trade_price": 2346,
+    "PONG": 89
+  },
+  "total_bytes_received": 273493001,
+  "first_message_latency_ms": {
+    "count": 1,
+    "values": [
+      961.2
+    ]
+  },
+  "top_markets_sample": [
+    {
+      "q": "Knicks vs. Cavaliers",
+      "vol24h": 8569884.0
+    },
+    {
+      "q": "Will Bitcoin hit $150k by June 30, 2026?",
+      "vol24h": 5821653.0
+    },
+    {
+      "q": "US x Iran permanent peace deal by May 26, 2026?",
+      "vol24h": 5498472.0
+    },
+    {
+      "q": "Will the Iran ceasefire continue through May 24?",
+      "vol24h": 4384160.0
+    },
+    {
+      "q": "Will the Iran ceasefire continue through May 25?",
+      "vol24h": 3595098.0
+    }
+  ]
+}

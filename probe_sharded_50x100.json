@@ -1,0 +1,1279 @@
+{
+  "probe": {
+    "type": "sharded",
+    "shards": 50,
+    "markets_total": 5000,
+    "tokens_total": 10000,
+    "tokens_per_shard": [
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200,
+      200
+    ],
+    "target_duration_s": 900,
+    "actual_duration_s": 905.01,
+    "start_wall_utc": "2026-05-26T03:11:42+00:00",
+    "end_wall_utc": "2026-05-26T03:26:47+00:00",
+    "stale_timeout_s": 45.0
+  },
+  "aggregate": {
+    "total_messages": 3437362,
+    "total_bytes": 2094114212,
+    "msg_per_sec": 3798.2,
+    "total_sessions_ended": 50,
+    "total_open_failures": 0,
+    "shards_that_never_reconnected": 50,
+    "uptime_mean_s": 900.0,
+    "uptime_median_s": 900.0,
+    "uptime_min_s": 900.0,
+    "uptime_max_s": 900.0
+  },
+  "shards": [
+    {
+      "shard_id": 0,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 86452,
+      "bytes": 52415751,
+      "first_msg_latency_ms": [
+        1421.5
+      ]
+    },
+    {
+      "shard_id": 1,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 76199,
+      "bytes": 46199871,
+      "first_msg_latency_ms": [
+        1390.4
+      ]
+    },
+    {
+      "shard_id": 2,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 86107,
+      "bytes": 52205785,
+      "first_msg_latency_ms": [
+        1334.8
+      ]
+    },
+    {
+      "shard_id": 3,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 72580,
+      "bytes": 44609820,
+      "first_msg_latency_ms": [
+        1435.3
+      ]
+    },
+    {
+      "shard_id": 4,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 45293,
+      "bytes": 28050090,
+      "first_msg_latency_ms": [
+        1267.0
+      ]
+    },
+    {
+      "shard_id": 5,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 88449,
+      "bytes": 53780795,
+      "first_msg_latency_ms": [
+        1401.3
+      ]
+    },
+    {
+      "shard_id": 6,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 49015,
+      "bytes": 30397269,
+      "first_msg_latency_ms": [
+        1421.1
+      ]
+    },
+    {
+      "shard_id": 7,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 111170,
+      "bytes": 68136550,
+      "first_msg_latency_ms": [
+        1392.1
+      ]
+    },
+    {
+      "shard_id": 8,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 67861,
+      "bytes": 41941808,
+      "first_msg_latency_ms": [
+        1446.4
+      ]
+    },
+    {
+      "shard_id": 9,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 52986,
+      "bytes": 32366855,
+      "first_msg_latency_ms": [
+        1418.6
+      ]
+    },
+    {
+      "shard_id": 10,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 91804,
+      "bytes": 55871486,
+      "first_msg_latency_ms": [
+        1385.8
+      ]
+    },
+    {
+      "shard_id": 11,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 59937,
+      "bytes": 36387264,
+      "first_msg_latency_ms": [
+        1327.1
+      ]
+    },
+    {
+      "shard_id": 12,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 47719,
+      "bytes": 29085529,
+      "first_msg_latency_ms": [
+        1354.6
+      ]
+    },
+    {
+      "shard_id": 13,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 48650,
+      "bytes": 29481876,
+      "first_msg_latency_ms": [
+        1397.9
+      ]
+    },
+    {
+      "shard_id": 14,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 62088,
+      "bytes": 37773632,
+      "first_msg_latency_ms": [
+        1425.6
+      ]
+    },
+    {
+      "shard_id": 15,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 54577,
+      "bytes": 33393732,
+      "first_msg_latency_ms": [
+        1334.6
+      ]
+    },
+    {
+      "shard_id": 16,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 69241,
+      "bytes": 42311069,
+      "first_msg_latency_ms": [
+        1413.5
+      ]
+    },
+    {
+      "shard_id": 17,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 43285,
+      "bytes": 26576144,
+      "first_msg_latency_ms": [
+        1372.6
+      ]
+    },
+    {
+      "shard_id": 18,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 67587,
+      "bytes": 41091310,
+      "first_msg_latency_ms": [
+        1445.2
+      ]
+    },
+    {
+      "shard_id": 19,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 89013,
+      "bytes": 54142271,
+      "first_msg_latency_ms": [
+        1390.6
+      ]
+    },
+    {
+      "shard_id": 20,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 100940,
+      "bytes": 60958813,
+      "first_msg_latency_ms": [
+        1397.1
+      ]
+    },
+    {
+      "shard_id": 21,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 79515,
+      "bytes": 48027042,
+      "first_msg_latency_ms": [
+        1446.8
+      ]
+    },
+    {
+      "shard_id": 22,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61447,
+      "bytes": 37409024,
+      "first_msg_latency_ms": [
+        1350.3
+      ]
+    },
+    {
+      "shard_id": 23,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 76634,
+      "bytes": 48500247,
+      "first_msg_latency_ms": [
+        1389.3
+      ]
+    },
+    {
+      "shard_id": 24,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 72597,
+      "bytes": 43981013,
+      "first_msg_latency_ms": [
+        1387.9
+      ]
+    },
+    {
+      "shard_id": 25,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61211,
+      "bytes": 37071276,
+      "first_msg_latency_ms": [
+        1439.1
+      ]
+    },
+    {
+      "shard_id": 26,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 62605,
+      "bytes": 38204793,
+      "first_msg_latency_ms": [
+        1420.9
+      ]
+    },
+    {
+      "shard_id": 27,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 78590,
+      "bytes": 47381097,
+      "first_msg_latency_ms": [
+        1390.0
+      ]
+    },
+    {
+      "shard_id": 28,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 83355,
+      "bytes": 50497036,
+      "first_msg_latency_ms": [
+        1395.6
+      ]
+    },
+    {
+      "shard_id": 29,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 70542,
+      "bytes": 42763916,
+      "first_msg_latency_ms": [
+        1337.3
+      ]
+    },
+    {
+      "shard_id": 30,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 60596,
+      "bytes": 36761242,
+      "first_msg_latency_ms": [
+        1390.2
+      ]
+    },
+    {
+      "shard_id": 31,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 67183,
+      "bytes": 40965528,
+      "first_msg_latency_ms": [
+        1362.2
+      ]
+    },
+    {
+      "shard_id": 32,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61812,
+      "bytes": 37572174,
+      "first_msg_latency_ms": [
+        1397.5
+      ]
+    },
+    {
+      "shard_id": 33,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 47886,
+      "bytes": 29362328,
+      "first_msg_latency_ms": [
+        1371.4
+      ]
+    },
+    {
+      "shard_id": 34,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 70006,
+      "bytes": 42575815,
+      "first_msg_latency_ms": [
+        1389.7
+      ]
+    },
+    {
+      "shard_id": 35,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 59928,
+      "bytes": 36314520,
+      "first_msg_latency_ms": [
+        1447.1
+      ]
+    },
+    {
+      "shard_id": 36,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 63988,
+      "bytes": 38930732,
+      "first_msg_latency_ms": [
+        1401.9
+      ]
+    },
+    {
+      "shard_id": 37,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 72684,
+      "bytes": 44110756,
+      "first_msg_latency_ms": [
+        1410.1
+      ]
+    },
+    {
+      "shard_id": 38,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 71198,
+      "bytes": 43272533,
+      "first_msg_latency_ms": [
+        1398.0
+      ]
+    },
+    {
+      "shard_id": 39,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 67442,
+      "bytes": 40975747,
+      "first_msg_latency_ms": [
+        1389.5
+      ]
+    },
+    {
+      "shard_id": 40,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61151,
+      "bytes": 37261822,
+      "first_msg_latency_ms": [
+        1448.5
+      ]
+    },
+    {
+      "shard_id": 41,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61735,
+      "bytes": 37582056,
+      "first_msg_latency_ms": [
+        1395.1
+      ]
+    },
+    {
+      "shard_id": 42,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 47781,
+      "bytes": 29138172,
+      "first_msg_latency_ms": [
+        1397.1
+      ]
+    },
+    {
+      "shard_id": 43,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 77428,
+      "bytes": 46888186,
+      "first_msg_latency_ms": [
+        1386.9
+      ]
+    },
+    {
+      "shard_id": 44,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 58408,
+      "bytes": 35420562,
+      "first_msg_latency_ms": [
+        1436.1
+      ]
+    },
+    {
+      "shard_id": 45,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 61093,
+      "bytes": 37229799,
+      "first_msg_latency_ms": [
+        1445.9
+      ]
+    },
+    {
+      "shard_id": 46,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 85953,
+      "bytes": 51979062,
+      "first_msg_latency_ms": [
+        1425.2
+      ]
+    },
+    {
+      "shard_id": 47,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 121546,
+      "bytes": 74626530,
+      "first_msg_latency_ms": [
+        1389.1
+      ]
+    },
+    {
+      "shard_id": 48,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 42916,
+      "bytes": 26287120,
+      "first_msg_latency_ms": [
+        1448.2
+      ]
+    },
+    {
+      "shard_id": 49,
+      "tokens": 200,
+      "connect_attempts": 1,
+      "connect_successes": 1,
+      "sessions_ended": 1,
+      "open_failures": 0,
+      "uptimes": [
+        900.0
+      ],
+      "reasons": [
+        "deadline_reached"
+      ],
+      "open_failure_reasons": [],
+      "mean_uptime_s": 900.0,
+      "median_uptime_s": 900.0,
+      "min_uptime_s": 900.0,
+      "max_uptime_s": 900.0,
+      "messages": 59179,
+      "bytes": 35846364,
+      "first_msg_latency_ms": [
+        1389.0
+      ]
+    }
+  ]
+}

@@ -81,6 +81,8 @@ class TradingBot:
             max_retries=self.config.api.max_retries,
             retry_delay=self.config.api.retry_delay_seconds,
             dry_run=self.config.is_dry_run,
+            use_websocket=self.config.mode.use_websocket,
+            max_subscribed_markets=self.config.mode.max_subscribed_markets,
         )
         await self.client.connect()
         

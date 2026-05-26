@@ -84,6 +84,20 @@ mode:
   cross_platform_enabled: true    # Enable cross-platform arbitrage detection
   kalshi_enabled: true            # Enable Kalshi market monitoring
   min_match_similarity: 0.6       # Minimum similarity score for market matching (0-1)
+
+  # Polymarket data source.
+  # - use_websocket: true  -> sub-second updates via WS (recommended); falls back to REST on failure
+  # - use_websocket: false -> REST polling only (old behavior, ~minutes per market rotation)
+  use_websocket: true
+
+  # Cap on Polymarket markets the WS subscribes to via ONE connection (top
+  # N by 24h volume). The constraint is an undocumented per-connection
+  # instrument cap (NautilusTrader's production adapter defaults to 200
+  # instruments/conn and auto-shards above that; above ~500 the server
+  # silently drops snapshots and closes 1006 within ~30-90s).
+  # 100 markets = 200 tokens stays well under the cap. To monitor more
+  # markets, add sharded WS connections instead of raising this number.
+  max_subscribed_markets: 100
   
   # Dry run settings
   dry_run_initial_balance: 10000
