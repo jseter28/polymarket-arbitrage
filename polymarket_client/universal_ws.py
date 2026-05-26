@@ -26,7 +26,6 @@ separate downstream task.
 from __future__ import annotations
 
 import asyncio
-import copy
 import json
 import logging
 import random
@@ -921,8 +920,9 @@ class PolymarketUniversalWS:
         return touched
 
     def _snapshot_book(self, market_id: str) -> OrderBook:
-        """Deep copy so consumers can't mutate internal state."""
-        return copy.deepcopy(self._books[market_id])
+        """Shallow clone — see PolymarketClient._snapshot_orderbook for the
+        safety contract. Replaces copy.deepcopy (R1 in AUDIT, ~5-10× faster)."""
+        return self._books[market_id].clone()
 
     # -----------------------------------------------------------------------
     # Internal: drop-oldest enqueue

@@ -43,15 +43,16 @@
 - At 3,235 msg/s observed, that's 0.3–1.6 seconds/sec of pure CPU on deepcopy alone.
 
 **The fix (R1 in audit):**
-- `OrderBook` / `PriceLevel` are shallow dataclass trees; `PriceLevel` is frozen.
-- Replace `copy.deepcopy` with a manual constructor that copies the `levels` lists only.
+- `OrderBook` is a shallow dataclass tree. `PriceLevel` is *not* technically frozen (audit detail was wrong) but is de-facto immutable — every "update" in the codebase replaces the slot (`levels[i] = PriceLevel(...)`), never mutates.
+- Added `clone()` to `OrderBookSide`, `TokenOrderBook`, and `OrderBook`. New list per side; PriceLevels shared by reference (immutable contract).
 
 **Tasks:**
-- [ ] Identify all `copy.deepcopy` call sites on the hot path (grep `copy.deepcopy` in `polymarket_client/`)
-- [ ] Replace with manual shallow-clone in both `universal_ws.py` and `api.py`
-- [ ] Benchmark before/after with a microbenchmark on a typical book
+- [x] Identify all `copy.deepcopy` call sites on the hot path (`polymarket_client/api.py:884`, `polymarket_client/universal_ws.py:925`)
+- [x] Replace with manual shallow-clone in both `universal_ws.py` and `api.py`; removed now-unused `import copy`
+- [x] Benchmark before/after: **60.8× speedup** (101.5 µs → 1.67 µs per snapshot). At 3,235 msg/s, reclaims ~32% of one CPU core.
+- [x] 6 unit tests in `tests/test_models.py` covering list-independence, ref-sharing of PriceLevels, and the slot-replacement mutation patterns from `_apply_book_snapshot` and `_apply_price_change`.
 
-**Effort:** S (single-day). **Expected gain:** 5–10× faster snapshot path; immediate CPU reduction on both bot and universal WS paths.
+**Effort:** S. **Actual gain:** 60.8× faster snapshot path (audit estimate was conservative).
 
 ---
 

@@ -7,7 +7,6 @@ Designed to be easily pluggable with real API implementations.
 """
 
 import asyncio
-import copy
 import json
 import logging
 import time
@@ -882,8 +881,14 @@ class PolymarketClient(BasePolymarketClient):
         return touched
 
     def _snapshot_orderbook(self, market_id: str) -> OrderBook:
-        """Deep copy so consumers can't mutate internal WS state."""
-        return copy.deepcopy(self._ws_combined_books[market_id])
+        """Shallow clone so consumers can't mutate internal WS state.
+
+        copy.deepcopy was 100-500 µs per yield (R1 in AUDIT). The new clone
+        copies the levels lists (the producer mutates them in place) but
+        shares PriceLevel refs, since levels are de-facto immutable —
+        every "update" replaces the slot, never mutates the existing level.
+        """
+        return self._ws_combined_books[market_id].clone()
 
     async def _stream_websocket_orderbooks(
         self, market_ids: list[str]

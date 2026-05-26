@@ -57,28 +57,35 @@ class PriceLevel:
 class OrderBookSide:
     """One side of an order book (bids or asks)."""
     levels: list[PriceLevel] = field(default_factory=list)
-    
+
     @property
     def best_price(self) -> Optional[float]:
         """Get the best price on this side."""
         if not self.levels:
             return None
         return self.levels[0].price
-    
+
     @property
     def best_size(self) -> Optional[float]:
         """Get the size at the best price."""
         if not self.levels:
             return None
         return self.levels[0].size
-    
+
     def get_depth(self, levels: int = 5) -> list[PriceLevel]:
         """Get top N levels of depth."""
         return self.levels[:levels]
-    
+
     def total_size(self, levels: int = 5) -> float:
         """Get total size in top N levels."""
         return sum(level.size for level in self.levels[:levels])
+
+    def clone(self) -> "OrderBookSide":
+        # New list, shared PriceLevel refs. Producer mutates levels in place
+        # (pop/append/sort/slot-assign in _apply_price_change); list copy
+        # isolates the consumer. PriceLevels are never mutated — every
+        # "update" replaces the slot — so ref-sharing is safe.
+        return OrderBookSide(levels=self.levels[:])
 
 
 @dataclass
@@ -118,6 +125,14 @@ class TokenOrderBook:
         if self.best_bid is None or self.best_ask is None:
             return None
         return (self.best_bid + self.best_ask) / 2
+
+    def clone(self) -> "TokenOrderBook":
+        return TokenOrderBook(
+            token_type=self.token_type,
+            bids=self.bids.clone(),
+            asks=self.asks.clone(),
+            last_update=self.last_update,
+        )
 
 
 @dataclass
@@ -160,6 +175,17 @@ class OrderBook:
         if self.best_bid_yes is None or self.best_bid_no is None:
             return None
         return self.best_bid_yes + self.best_bid_no
+
+    def clone(self) -> "OrderBook":
+        # Shallow clone for hot-path yields — replaces copy.deepcopy at the
+        # WS snapshot site. See OrderBookSide.clone for the safety contract.
+        return OrderBook(
+            market_id=self.market_id,
+            yes=self.yes.clone(),
+            no=self.no.clone(),
+            timestamp=self.timestamp,
+            recv_mono_ns=self.recv_mono_ns,
+        )
 
 
 @dataclass
