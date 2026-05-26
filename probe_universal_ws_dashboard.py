@@ -315,12 +315,81 @@ DASHBOARD_HTML = r"""<!doctype html>
   .events li .kind.session_started { color: var(--accent); }
   .events li .reason { color: var(--muted); }
   .events li.danger .kind { color: var(--danger); }
+
+  /* ---------- Top nav (always visible) ---------- */
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px; }
+  .topbar h1 { margin: 0; font-size: 16px; font-weight: 600; }
+  .nav-tabs { display: flex; gap: 4px; }
+  .nav-tabs a {
+    display: inline-block;
+    padding: 6px 14px;
+    color: var(--muted);
+    text-decoration: none;
+    border: 1px solid var(--bg3);
+    border-radius: 4px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: var(--bg2);
+  }
+  .nav-tabs a:hover { color: var(--fg); }
+  .nav-tabs a.active { color: var(--fg); border-color: var(--accent); background: var(--bg3); }
+  .topbar .clock { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .topbar .clock b { color: var(--fg); font-weight: 500; }
+
+  /* ---------- Markets view layout ---------- */
+  #view-markets { display: grid; grid-template-columns: 220px 1fr; gap: 12px; align-items: start; }
+  .sidebar {
+    background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px;
+    padding: 10px 0; max-height: calc(100vh - 110px); overflow-y: auto;
+    position: sticky; top: 16px;
+  }
+  .sidebar h3 { margin: 0 0 8px 0; padding: 0 14px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+  .sidebar ul { list-style: none; padding: 0; margin: 0; }
+  .sidebar li a {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 5px 14px; color: var(--fg); text-decoration: none;
+    font-size: 12px; border-left: 2px solid transparent;
+  }
+  .sidebar li a:hover { background: var(--bg3); }
+  .sidebar li a.active { background: var(--bg3); border-left-color: var(--accent); color: var(--fg); }
+  .sidebar li a .count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .sidebar li a.active .count { color: var(--accent); }
+  .sidebar .empty { padding: 12px 14px; color: var(--muted); font-size: 12px; font-style: italic; }
+
+  .grid-wrap { min-width: 0; }
+  .grid-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-bottom: 8px;
+  }
+  .grid-header h2 { margin: 0; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+  .grid-header .grid-meta { color: var(--muted); font-size: 11px; }
+  .markets-panel { background: var(--bg2); border: 1px solid var(--bg3); border-radius: 6px; overflow: hidden; }
+  #markets-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  #markets-table th { background: var(--bg3); color: var(--muted); text-transform: uppercase; font-size: 11px; font-weight: 500; letter-spacing: 0.5px; padding: 6px 10px; text-align: left; cursor: default; user-select: none; }
+  #markets-table th.num { text-align: right; }
+  #markets-table td { padding: 6px 10px; border-bottom: 1px solid var(--bg3); }
+  #markets-table td.num { text-align: right; }
+  #markets-table tr.stale td { color: var(--muted); }
+  #markets-table td.q { max-width: 480px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #markets-table .nobook { color: var(--muted); font-style: italic; }
+  #markets-table .empty { padding: 16px; text-align: center; color: var(--muted); font-style: italic; }
 </style>
 </head>
 <body>
 
+<div class="topbar">
+  <h1>Universal WS Soak</h1>
+  <nav class="nav-tabs">
+    <a href="#status" id="tab-status">Status</a>
+    <a href="#markets" id="tab-markets">Markets</a>
+  </nav>
+  <div class="clock"><b id="elapsed">…</b> <span id="elapsed-pct"></span></div>
+</div>
+
+<div id="view-status">
+
 <header>
-  <h1>Universal WS Soak — <span id="elapsed">…</span> <span id="elapsed-pct" style="color:var(--muted); font-weight:400;"></span></h1>
   <div class="meta">
     <span>start: <b id="start-time">…</b></span>
     <span>target: <b id="target-duration">…</b></span>
@@ -362,6 +431,34 @@ DASHBOARD_HTML = r"""<!doctype html>
   <h2>Events (most recent 200)</h2>
   <div class="panel"><ul class="events" id="events-list"></ul></div>
 </section>
+
+</div><!-- /#view-status -->
+
+<div id="view-markets" class="hidden">
+  <aside class="sidebar">
+    <h3>Categories</h3>
+    <ul id="categories-list"><li class="empty">loading…</li></ul>
+  </aside>
+  <main class="grid-wrap">
+    <div class="grid-header">
+      <h2 id="grid-title">Markets</h2>
+      <span class="grid-meta" id="grid-meta">—</span>
+    </div>
+    <div class="markets-panel">
+      <table id="markets-table">
+        <thead><tr>
+          <th>Question</th>
+          <th class="num">YES</th>
+          <th class="num">NO</th>
+          <th class="num">spread</th>
+          <th class="num">vol 24h</th>
+          <th class="num">last upd</th>
+        </tr></thead>
+        <tbody><tr><td colspan="6" class="empty">pick a category</td></tr></tbody>
+      </table>
+    </div>
+  </main>
+</div><!-- /#view-markets -->
 
 <script>
 const fmt = (n) => n == null ? "—" : (typeof n === 'number' ? n.toLocaleString() : n);
@@ -509,6 +606,164 @@ async function pollEvents() {
   } catch (e) { console.warn('events poll failed', e); }
 }
 
+// ---------- Hash router + Markets browse view ----------
+
+const VIEW_STATUS = 'status';
+const VIEW_MARKETS = 'markets';
+let currentView = VIEW_STATUS;
+let currentCat = null;       // active tag slug, or null
+let categoriesCache = [];    // last categories payload
+let gridSort = 'volume';
+let gridPollTimer = null;
+
+function parseHash() {
+  const h = (location.hash || '').replace(/^#/, '');
+  if (!h || h === VIEW_STATUS) return { view: VIEW_STATUS, cat: null };
+  if (h === VIEW_MARKETS) return { view: VIEW_MARKETS, cat: null };
+  if (h.startsWith('cat/')) return { view: VIEW_MARKETS, cat: decodeURIComponent(h.slice(4)) };
+  // Unknown hash → fall back to status, don't blow up.
+  return { view: VIEW_STATUS, cat: null };
+}
+
+function applyRoute() {
+  const { view, cat } = parseHash();
+  currentView = view;
+
+  document.getElementById('view-status').classList.toggle('hidden', view !== VIEW_STATUS);
+  document.getElementById('view-markets').classList.toggle('hidden', view !== VIEW_MARKETS);
+  document.getElementById('tab-status').classList.toggle('active', view === VIEW_STATUS);
+  document.getElementById('tab-markets').classList.toggle('active', view === VIEW_MARKETS);
+
+  if (view === VIEW_MARKETS) {
+    // First entry to markets view → load categories so the sidebar paints.
+    if (categoriesCache.length === 0) loadCategories();
+    pickCategory(cat, /*pushHash=*/false);
+    startGridPolling();
+  } else {
+    stopGridPolling();
+  }
+}
+
+async function loadCategories() {
+  try {
+    const r = await fetch('/api/categories');
+    if (!r.ok) return;
+    const d = await r.json();
+    categoriesCache = d.categories || [];
+    renderCategories();
+    // If we landed on #markets with no slug, auto-pick highest-count category
+    // once categories arrive. Same for an unknown slug that didn't match.
+    if (currentView === VIEW_MARKETS && !currentCat && categoriesCache.length > 0) {
+      pickCategory(categoriesCache[0].slug, /*pushHash=*/true);
+    }
+  } catch (e) { console.warn('categories load failed', e); }
+}
+
+function renderCategories() {
+  const ul = document.getElementById('categories-list');
+  if (categoriesCache.length === 0) {
+    ul.innerHTML = '<li class="empty">no categories yet</li>';
+    return;
+  }
+  ul.innerHTML = categoriesCache.map(c => {
+    const active = (currentCat === c.slug) ? ' active' : '';
+    const slug = encodeURIComponent(c.slug);
+    return `<li><a href="#cat/${slug}" class="${active.trim()}" data-slug="${c.slug}">
+              <span>${escapeHtml(c.label)}</span>
+              <span class="count">${c.count}</span>
+            </a></li>`;
+  }).join('');
+}
+
+function pickCategory(slug, pushHash) {
+  // If no slug requested but a default is available, pick the first (highest count).
+  if (!slug && categoriesCache.length > 0) slug = categoriesCache[0].slug;
+  currentCat = slug || null;
+
+  if (pushHash && slug) {
+    location.hash = '#cat/' + encodeURIComponent(slug);
+    return; // applyRoute will fire from hashchange and re-enter here
+  }
+  renderCategories();
+
+  if (!currentCat) {
+    document.getElementById('grid-title').textContent = 'Markets';
+    document.getElementById('grid-meta').textContent = '—';
+    document.querySelector('#markets-table tbody').innerHTML =
+      '<tr><td colspan="6" class="empty">pick a category</td></tr>';
+    return;
+  }
+  const cat = categoriesCache.find(c => c.slug === currentCat);
+  document.getElementById('grid-title').textContent = cat ? cat.label : currentCat;
+  loadMarkets();
+}
+
+function startGridPolling() {
+  stopGridPolling();
+  if (currentCat) gridPollTimer = setInterval(loadMarkets, 3000);
+}
+function stopGridPolling() {
+  if (gridPollTimer) { clearInterval(gridPollTimer); gridPollTimer = null; }
+}
+
+async function loadMarkets() {
+  if (!currentCat) return;
+  try {
+    const url = `/api/markets?tag=${encodeURIComponent(currentCat)}&sort=${gridSort}&limit=100`;
+    const r = await fetch(url);
+    if (!r.ok) return;
+    const d = await r.json();
+    renderMarkets(d.markets || [], d.count || 0);
+  } catch (e) { console.warn('markets load failed', e); }
+}
+
+function renderMarkets(rows, total) {
+  const tbody = document.querySelector('#markets-table tbody');
+  const meta = document.getElementById('grid-meta');
+  meta.textContent = `${total} market${total === 1 ? '' : 's'} · sorted by ${gridSort}`;
+  if (rows.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">no markets in this category yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const stale = (r.last_msg_age_s != null && r.last_msg_age_s > 60) ? ' stale' : '';
+    const yes = fmtPx(r.yes_bid, r.yes_ask);
+    const no  = fmtPx(r.no_bid, r.no_ask);
+    const spread = r.spread != null ? r.spread.toFixed(3) : '<span class="nobook">—</span>';
+    const vol = fmtMoney(r.volume_24h);
+    const age = r.last_msg_age_s == null ? '<span class="nobook">—</span>' : fmtAge(r.last_msg_age_s);
+    return `<tr class="${stale.trim()}">
+      <td class="q" title="${escapeAttr(r.question)}">${escapeHtml(r.question)}</td>
+      <td class="num">${yes}</td>
+      <td class="num">${no}</td>
+      <td class="num">${spread}</td>
+      <td class="num">${vol}</td>
+      <td class="num">${age}</td>
+    </tr>`;
+  }).join('');
+}
+
+function fmtPx(bid, ask) {
+  // Display the side that has data; mid if both exist.
+  if (bid == null && ask == null) return '<span class="nobook">—</span>';
+  if (bid == null) return ask.toFixed(3);
+  if (ask == null) return bid.toFixed(3);
+  return ((bid + ask) / 2).toFixed(3);
+}
+function fmtMoney(v) {
+  if (v == null || v === 0) return '<span class="nobook">—</span>';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e3) return '$' + (v / 1e3).toFixed(1) + 'K';
+  return '$' + v.toFixed(0);
+}
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function escapeAttr(s) { return escapeHtml(s).replace(/"/g, '&quot;'); }
+
+window.addEventListener('hashchange', applyRoute);
+
 window.addEventListener('load', () => {
   chartMsgs = makeChart('chart-msgs', '#2dd4bf');
   chartDrops = makeChart('chart-drops', '#ef4444');
@@ -518,6 +773,10 @@ window.addEventListener('load', () => {
   setInterval(pollStatus, 2000);
   setInterval(pollHistory, 30000);
   setInterval(pollEvents, 5000);
+
+  // Markets browse view: refresh categories every 60s; route on initial load.
+  setInterval(() => { if (currentView === VIEW_MARKETS) loadCategories(); }, 60000);
+  applyRoute();
 });
 </script>
 </body>
@@ -530,7 +789,7 @@ window.addEventListener('load', () => {
 # ---------------------------------------------------------------------------
 
 
-def create_app(recorder: HistoryRecorder) -> FastAPI:
+def create_app(recorder: HistoryRecorder, ws: PolymarketUniversalWS) -> FastAPI:
     app = FastAPI(title="Universal WS Soak Dashboard")
 
     @app.get("/", response_class=HTMLResponse)
@@ -549,6 +808,18 @@ def create_app(recorder: HistoryRecorder) -> FastAPI:
     async def events(limit: int = 500):
         evs = list(recorder.events)[-limit:]
         return JSONResponse({"events": evs})
+
+    @app.get("/api/categories")
+    async def categories():
+        return JSONResponse({"categories": ws.categories()})
+
+    @app.get("/api/markets")
+    async def markets(tag: str, sort: str = "volume", limit: int = 100):
+        # Clamp limit to a sensible ceiling so a hostile/typoed query can't
+        # try to materialize the entire universe in one response.
+        limit = max(1, min(int(limit), 500))
+        rows = ws.markets_by_tag(tag_slug=tag, sort=sort, limit=limit)
+        return JSONResponse({"tag": tag, "sort": sort, "count": len(rows), "markets": rows})
 
     return app
 
@@ -578,7 +849,7 @@ async def main_async(args) -> None:
         fatal_error=None,
     )
 
-    app = create_app(recorder)
+    app = create_app(recorder, ws)
     config = uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="warning")
     server = uvicorn.Server(config)
 

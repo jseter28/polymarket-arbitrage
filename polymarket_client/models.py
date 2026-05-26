@@ -189,6 +189,11 @@ class Market:
     category: str = ""
     tags: list[str] = field(default_factory=list)
 
+    # Tag join data (populated by PolymarketUniversalWS via Gamma /events)
+    event_id: str = ""
+    tag_ids: list[int] = field(default_factory=list)
+    tag_slugs: list[str] = field(default_factory=list)
+
 
 @dataclass
 class Order:

@@ -122,15 +122,134 @@ def _partition_round_robin(markets: list[Market], shard_size: int) -> list[list[
     return shards
 
 
+def _parse_end_date(raw: object) -> Optional[datetime]:
+    """Best-effort ISO-8601 parse of Gamma's endDate field. Returns None on failure."""
+    if not raw:
+        return None
+    if isinstance(raw, datetime):
+        return raw
+    s = str(raw).strip()
+    if not s:
+        return None
+    # Gamma emits e.g. "2026-06-15T17:00:00Z"
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+async def _fetch_event_tags(
+    gamma_url: str,
+    client: httpx.AsyncClient,
+    page_size: int = 100,
+    inter_page_delay_s: float = 0.15,
+    max_pages: int = 100,
+) -> tuple[dict[str, list[dict]], dict[str, dict]]:
+    """
+    Paginate Gamma /events for active events, returning:
+
+      - event_tags: ``event_id -> [{"tag_id": int, "slug": str, "label": str}, ...]``
+      - tag_registry: ``slug -> {"tag_id": int, "slug": str, "label": str}`` (deduplicated)
+
+    Best-effort: on per-page fetch failure we stop early and return what we have
+    so far rather than poisoning the whole start sequence.
+    """
+    event_tags: dict[str, list[dict]] = {}
+    tag_registry: dict[str, dict] = {}
+    offset = 0
+    pages = 0
+
+    while pages < max_pages:
+        params = {
+            "active": "true",
+            "closed": "false",
+            "limit": page_size,
+            "offset": offset,
+        }
+        try:
+            resp = await client.get(f"{gamma_url}/events", params=params)
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning(
+                f"Gamma /events fetch failed at offset={offset}: {e}; "
+                f"continuing with {len(event_tags)} events captured so far"
+            )
+            break
+
+        data = resp.json()
+        if not data:
+            break
+
+        for item in data:
+            event_id = str(item.get("id", "") or "")
+            if not event_id:
+                continue
+            tags_list: list[dict] = []
+            for t in (item.get("tags") or []):
+                slug = t.get("slug")
+                if not slug:
+                    continue
+                slug = str(slug)
+                try:
+                    tag_id = int(t.get("id") or 0)
+                except (TypeError, ValueError):
+                    tag_id = 0
+                label = str(t.get("label") or t.get("name") or slug)
+                entry = {"tag_id": tag_id, "slug": slug, "label": label}
+                tags_list.append(entry)
+                if slug not in tag_registry:
+                    tag_registry[slug] = entry
+            event_tags[event_id] = tags_list
+
+        pages += 1
+        if len(data) < page_size:
+            break
+        offset += page_size
+        await asyncio.sleep(inter_page_delay_s)
+
+    logger.info(
+        f"Gamma /events: fetched {len(event_tags)} events across {pages} pages, "
+        f"{len(tag_registry)} unique tags"
+    )
+    return event_tags, tag_registry
+
+
+def _extract_event_id(item: dict) -> str:
+    """
+    Pull the event id off a Gamma market record. Gamma may serve either a top-level
+    ``eventId`` string or a nested ``events: [{"id": ...}, ...]`` array; accept both.
+    """
+    raw = item.get("eventId")
+    if raw:
+        return str(raw)
+    events = item.get("events") or []
+    if isinstance(events, list) and events:
+        first = events[0]
+        if isinstance(first, dict):
+            eid = first.get("id")
+            if eid:
+                return str(eid)
+    return ""
+
+
 async def _fetch_active_markets(
     gamma_url: str,
     max_n: int,
     page_size: int = 100,
     inter_page_delay_s: float = 0.15,
-) -> list[Market]:
+) -> tuple[list[Market], dict[str, dict]]:
     """
     Paginate Gamma for active markets, sorted by 24h volume desc, returning up
-    to ``max_n`` markets that have valid YES/NO token ids.
+    to ``max_n`` markets that have valid YES/NO token ids — plus a deduplicated
+    ``slug -> {tag_id, slug, label}`` registry of every tag that appears on any
+    active event.
+
+    Markets whose event_id has no tag entry (e.g. event missing from /events,
+    or paginated out) are returned with empty ``tag_slugs`` and will surface
+    under the "uncategorized" bucket in the categories list rather than being
+    dropped.
 
     Mirrors the validated logic in `polymarket_client/api.py::list_markets`,
     but returns `Market` dataclasses without dragging in the full client.
@@ -138,6 +257,12 @@ async def _fetch_active_markets(
     out: list[Market] = []
     offset = 0
     async with httpx.AsyncClient(timeout=30.0) as client:
+        # Build event_id -> tags map up front. Failures here degrade gracefully
+        # (markets still surface, just under "uncategorized").
+        event_tags, tag_registry = await _fetch_event_tags(
+            gamma_url, client, page_size=page_size, inter_page_delay_s=inter_page_delay_s
+        )
+
         while len(out) < max_n:
             params = {
                 "closed": "false",
@@ -172,6 +297,13 @@ async def _fetch_active_markets(
                 no_tok = str(ids[1]).strip()
                 if not yes_tok or not no_tok:
                     continue
+
+                event_id = _extract_event_id(item)
+                joined_tags = event_tags.get(event_id, [])
+                tag_ids = [t["tag_id"] for t in joined_tags]
+                tag_slugs = [t["slug"] for t in joined_tags]
+                tag_labels = [t["label"] for t in joined_tags]
+
                 m = Market(
                     market_id=str(item.get("id", "")),
                     condition_id=str(item.get("conditionId", "") or ""),
@@ -183,6 +315,11 @@ async def _fetch_active_markets(
                     closed=bool(item.get("closed", False)),
                     volume_24h=float(item.get("volume24hr") or 0.0),
                     liquidity=float(item.get("liquidity") or 0.0),
+                    end_date=_parse_end_date(item.get("endDate")),
+                    tags=tag_labels,
+                    event_id=event_id,
+                    tag_ids=tag_ids,
+                    tag_slugs=tag_slugs,
                 )
                 if not m.market_id:
                     continue
@@ -199,7 +336,12 @@ async def _fetch_active_markets(
             offset += page_size
             await asyncio.sleep(inter_page_delay_s)
 
-    return out[:max_n]
+    matched = sum(1 for m in out if m.tag_slugs)
+    logger.info(
+        f"Tag join: {matched}/{len(out)} markets matched to event tags "
+        f"({len(out) - matched} uncategorized)"
+    )
+    return out[:max_n], tag_registry
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +387,12 @@ class PolymarketUniversalWS:
         self._shard_state: list[ShardState] = []
         self._shard_markets: list[list[Market]] = []
 
+        # Per-market metadata (populated at start) — keyed by market_id.
+        # Used by categories() / markets_by_tag() / market_detail().
+        self._market_meta: dict[str, Market] = {}
+        # tag_slug -> {"tag_id": int, "slug": str, "label": str}
+        self._tag_registry: dict[str, dict] = {}
+
         self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=queue_maxsize)
         self._stop_event: asyncio.Event = asyncio.Event()
         self._drops: int = 0
@@ -270,10 +418,14 @@ class PolymarketUniversalWS:
             logger.info(
                 f"Fetching active Polymarket universe from Gamma (max_markets={self.max_markets})..."
             )
-            markets = await _fetch_active_markets(self.gamma_url, self.max_markets)
+            markets, tag_registry = await _fetch_active_markets(
+                self.gamma_url, self.max_markets
+            )
         else:
             logger.info(f"Fetching metadata for {len(market_ids)} caller-supplied market ids")
-            all_active = await _fetch_active_markets(self.gamma_url, self.max_markets)
+            all_active, tag_registry = await _fetch_active_markets(
+                self.gamma_url, self.max_markets
+            )
             by_id = {m.market_id: m for m in all_active}
             markets = [by_id[mid] for mid in market_ids if mid in by_id]
             missing = len(market_ids) - len(markets)
@@ -284,6 +436,9 @@ class PolymarketUniversalWS:
 
         if not markets:
             raise RuntimeError("PolymarketUniversalWS.start(): zero valid markets to subscribe")
+
+        self._tag_registry = tag_registry
+        self._market_meta = {m.market_id: m for m in markets}
 
         self._shard_markets = _partition_round_robin(markets, self.shard_size)
         self._shard_state = [
@@ -375,6 +530,138 @@ class PolymarketUniversalWS:
             "drops": self._drops,
             "shards": [s.to_dict() for s in self._shard_state],
         }
+
+    # -----------------------------------------------------------------------
+    # Markets-browser surface (Phase 1: HTTP snapshot queries)
+    # -----------------------------------------------------------------------
+
+    UNCATEGORIZED_SLUG = "uncategorized"
+
+    def categories(self) -> list[dict]:
+        """
+        Return the category sidebar payload, sorted by market count desc.
+
+        Each entry: ``{"tag_id": int, "slug": str, "label": str, "count": int}``.
+
+        A synthetic "uncategorized" bucket is appended whenever any market is
+        missing tag data (event_id not in /events response, or tags missing on
+        the event itself).
+        """
+        counts: dict[str, int] = {}
+        uncat = 0
+        for m in self._market_meta.values():
+            if not m.tag_slugs:
+                uncat += 1
+                continue
+            for slug in m.tag_slugs:
+                counts[slug] = counts.get(slug, 0) + 1
+
+        out: list[dict] = []
+        for slug, info in self._tag_registry.items():
+            cnt = counts.get(slug, 0)
+            if cnt == 0:
+                # Tag exists on some event but no fetched market uses it. Skip
+                # rather than show empty categories.
+                continue
+            out.append({
+                "tag_id": info["tag_id"],
+                "slug": slug,
+                "label": info["label"],
+                "count": cnt,
+            })
+
+        out.sort(key=lambda c: (-c["count"], c["label"].lower()))
+
+        if uncat > 0:
+            out.append({
+                "tag_id": 0,
+                "slug": self.UNCATEGORIZED_SLUG,
+                "label": "Uncategorized",
+                "count": uncat,
+            })
+        return out
+
+    def markets_by_tag(
+        self,
+        tag_slug: str,
+        sort: str = "volume",
+        limit: int = 100,
+    ) -> list[dict]:
+        """
+        Return market summary rows for the grid.
+
+        Each row:
+          ``market_id, question, yes_bid, yes_ask, no_bid, no_ask, spread,
+            volume_24h, liquidity, last_msg_age_s, msg_rate_1min, tags, end_date``
+
+        ``msg_rate_1min`` is always 0 in Phase 1 — per-market metrics arrive
+        in Phase 2. ``last_msg_age_s`` is derived from the combined book
+        timestamp when a book has been received, else None.
+
+        ``sort`` ∈ {"volume" (default), "last_update", "msg_rate"}. Unknown
+        sorts fall through to "volume".
+        """
+        now = datetime.utcnow()
+        rows: list[dict] = []
+        want_uncat = tag_slug == self.UNCATEGORIZED_SLUG
+
+        for market_id, m in self._market_meta.items():
+            if want_uncat:
+                if m.tag_slugs:
+                    continue
+            else:
+                if tag_slug not in m.tag_slugs:
+                    continue
+
+            book = self._books.get(market_id)
+            yes_bid = book.best_bid_yes if book else None
+            yes_ask = book.best_ask_yes if book else None
+            no_bid = book.best_bid_no if book else None
+            no_ask = book.best_ask_no if book else None
+            spread = (
+                yes_ask - yes_bid
+                if (yes_ask is not None and yes_bid is not None)
+                else None
+            )
+            last_msg_age_s: Optional[float] = None
+            if book and book.timestamp:
+                last_msg_age_s = (now - book.timestamp).total_seconds()
+
+            rows.append({
+                "market_id": market_id,
+                "question": m.question,
+                "yes_bid": yes_bid,
+                "yes_ask": yes_ask,
+                "no_bid": no_bid,
+                "no_ask": no_ask,
+                "spread": spread,
+                "volume_24h": m.volume_24h,
+                "liquidity": m.liquidity,
+                "last_msg_age_s": (
+                    round(last_msg_age_s, 1) if last_msg_age_s is not None else None
+                ),
+                "msg_rate_1min": 0,  # populated in Phase 2
+                "tags": [
+                    {"slug": s, "label": (self._tag_registry.get(s) or {}).get("label", s)}
+                    for s in m.tag_slugs
+                ],
+                "end_date": m.end_date.isoformat() if m.end_date else None,
+            })
+
+        if sort == "last_update":
+            # None (no book yet) sorts last; smaller age first among the rest.
+            rows.sort(
+                key=lambda r: (
+                    r["last_msg_age_s"] is None,
+                    r["last_msg_age_s"] if r["last_msg_age_s"] is not None else 0.0,
+                )
+            )
+        elif sort == "msg_rate":
+            rows.sort(key=lambda r: r["msg_rate_1min"] or 0, reverse=True)
+        else:
+            rows.sort(key=lambda r: r["volume_24h"] or 0, reverse=True)
+
+        return rows[:limit]
 
     # -----------------------------------------------------------------------
     # Internal: book state mutations (lifted from PolymarketClient)
