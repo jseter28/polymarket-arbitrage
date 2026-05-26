@@ -392,3 +392,17 @@ class MarketState:
         no_notional = self.no_position.notional if self.no_position else 0
         return yes_notional + no_notional
 
+    def is_stale(self, now_mono_ns: int, max_age_ns: int) -> bool:
+        """Whether the order book is older than max_age_ns at now_mono_ns.
+
+        Returns True if recv_mono_ns is None (unknown age — treat
+        conservatively as stale) or if (now - recv) > max_age_ns. Used by
+        analyze workers to skip markets whose books haven't refreshed
+        recently — covers WS disconnects, REST poll gaps, and any other
+        source of staleness.
+        """
+        recv = self.order_book.recv_mono_ns
+        if recv is None:
+            return True
+        return (now_mono_ns - recv) > max_age_ns
+

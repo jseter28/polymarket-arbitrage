@@ -127,3 +127,44 @@ def test_clone_preserves_recv_mono_ns_for_latency_math():
     ob2 = OrderBook(market_id="m2")  # recv_mono_ns = None
     c2 = ob2.clone()
     assert c2.recv_mono_ns is None
+
+
+# --- MarketState.is_stale ----------------------------------------------------
+
+from polymarket_client.models import Market, MarketState
+
+
+def _state_with_recv(recv_mono_ns):
+    ob = OrderBook(market_id="m1", recv_mono_ns=recv_mono_ns)
+    return MarketState(
+        market=Market(market_id="m1", condition_id="m1", question="q"),
+        order_book=ob,
+    )
+
+
+def test_is_stale_none_recv_is_treated_as_stale():
+    s = _state_with_recv(None)
+    assert s.is_stale(now_mono_ns=10**9, max_age_ns=30 * 10**9) is True
+
+
+def test_is_stale_fresh_recv_is_not_stale():
+    now = 10**12
+    s = _state_with_recv(now - 1_000_000)  # 1 ms ago
+    assert s.is_stale(now_mono_ns=now, max_age_ns=30 * 10**9) is False
+
+
+def test_is_stale_old_recv_is_stale():
+    now = 10**12
+    s = _state_with_recv(now - 60 * 10**9)  # 60 s ago
+    assert s.is_stale(now_mono_ns=now, max_age_ns=30 * 10**9) is True
+
+
+def test_is_stale_boundary_at_threshold():
+    """Exactly at the threshold is NOT stale (strict greater-than)."""
+    now = 10**12
+    threshold = 30 * 10**9
+    s = _state_with_recv(now - threshold)
+    assert s.is_stale(now_mono_ns=now, max_age_ns=threshold) is False
+    # 1 ns over the threshold IS stale
+    s2 = _state_with_recv(now - threshold - 1)
+    assert s2.is_stale(now_mono_ns=now, max_age_ns=threshold) is True

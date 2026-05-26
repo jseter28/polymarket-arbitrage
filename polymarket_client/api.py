@@ -36,6 +36,11 @@ from polymarket_client.models import (
 
 logger = logging.getLogger(__name__)
 
+# R3: how many consecutive WS connection attempts (with zero progress in
+# between) before we surrender and fall back to REST polling. With backoff
+# 1s→30s, this gives roughly 1+2+4+8+16+30 = 61s of retry before fallback.
+_WS_MAX_CONSECUTIVE_FAILURES = 6
+
 
 class BasePolymarketClient(ABC):
     """Abstract base class for Polymarket client implementations."""
@@ -588,8 +593,13 @@ class PolymarketClient(BasePolymarketClient):
         """
         Stream order book updates. Dispatches between:
           - simulation       (use_simulation=True)
-          - WebSocket        (self.use_websocket=True, falls back to REST on failure)
-          - REST polling     (default fallback)
+          - WebSocket        (self.use_websocket=True, with reconnect loop)
+          - REST polling     (final fallback after WS gives up)
+
+        R3: WS-loss should be a blip, not a permanent regression to REST. The
+        reconnect loop retries WS with exponential backoff. Only after
+        `_WS_MAX_CONSECUTIVE_FAILURES` consecutive failures *without making
+        progress* do we surrender and fall through to REST.
         """
         if use_simulation:
             async for item in self._stream_simulated_orderbooks(market_ids):
@@ -597,16 +607,49 @@ class PolymarketClient(BasePolymarketClient):
             return
 
         if self.use_websocket:
-            try:
-                async for item in self._stream_websocket_orderbooks(market_ids):
-                    yield item
-                # WS exited cleanly (unexpected for a streaming source) — fall through
-                logger.warning("WS stream exited without error; falling back to REST polling")
-            except Exception as e:
-                logger.warning(
-                    f"WS stream failed ({type(e).__name__}: {e}); falling back to REST polling"
-                )
-            # Fall through to REST below for the rest of the session.
+            backoff = 1.0
+            consecutive_failures = 0
+            last_disconnect_mono_ns: Optional[int] = None
+
+            while True:
+                if last_disconnect_mono_ns is not None:
+                    gap_s = (time.monotonic_ns() - last_disconnect_mono_ns) / 1e9
+                    logger.info(f"WS reconnect attempt after {gap_s:.1f}s gap")
+
+                items_in_attempt = 0
+                attempt_start_mono_ns = time.monotonic_ns()
+                try:
+                    async for item in self._stream_websocket_orderbooks(market_ids):
+                        items_in_attempt += 1
+                        yield item
+                    logger.warning("WS stream exited cleanly; will reconnect")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    uptime_s = (time.monotonic_ns() - attempt_start_mono_ns) / 1e9
+                    logger.warning(
+                        f"WS stream failed after {uptime_s:.1f}s "
+                        f"({items_in_attempt} msgs): {type(e).__name__}: {e}"
+                    )
+
+                last_disconnect_mono_ns = time.monotonic_ns()
+
+                if items_in_attempt > 0:
+                    # Made progress — treat as a transient blip, fast retry.
+                    consecutive_failures = 0
+                    backoff = 1.0
+                else:
+                    consecutive_failures += 1
+                    if consecutive_failures >= _WS_MAX_CONSECUTIVE_FAILURES:
+                        logger.error(
+                            f"WS failed {consecutive_failures} consecutive times "
+                            f"without progress; falling back to REST polling"
+                        )
+                        break
+                    backoff = min(backoff * 2, 30.0)
+
+                logger.info(f"WS backoff {backoff:.1f}s before next attempt")
+                await asyncio.sleep(backoff)
 
         async for item in self._stream_rest_orderbooks(market_ids):
             yield item

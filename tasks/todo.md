@@ -64,17 +64,20 @@
 - Reconnect logic exists but doesn't surface the gap to consumers. After a reconnect, downstream code has no way to know "I just missed N seconds of updates for market X."
 - Risk: bot acts on a stale `MarketState` because the last update before disconnect is still cached, and `analyze()` happily runs on it.
 
-**The fix:**
-- On WS reconnect, emit a synthetic "stale" marker for each subscribed market until a fresh snapshot arrives.
-- `ArbEngine.analyze` must check the marker and skip stale states.
+**The fix (shipped):**
+- Age-based staleness model: a state is stale if `(now - state.order_book.recv_mono_ns) > threshold` or if `recv_mono_ns is None`. Works for any source (WS, REST, simulation, future mempool) and self-clears when fresh data arrives — no producer→consumer signaling needed.
+- WS reconnect loop with exponential backoff replaces the previous "fall through to REST on first WS hiccup" behavior. Falls back to REST only after 6 consecutive zero-progress failures (~61 s of retry).
 
 **Tasks:**
-- [ ] Add `is_stale: bool` to `MarketState`
-- [ ] Mark all cached states stale on disconnect; clear on first snapshot post-reconnect
-- [ ] Skip analyze if `state.is_stale`
-- [ ] Log reconnect events with the gap duration
+- [x] Add `MarketState.is_stale(now_mono_ns, max_age_ns)` method in `polymarket_client/models.py`
+- [x] Mark stale via timestamp comparison — no explicit "mark all stale" needed; aging out is automatic
+- [x] Skip analyze if `state.is_stale(...)` in `_analyze_worker` (both `main.py` and `run_with_dashboard.py`); `_stale_skips` counter surfaced in monitoring log
+- [x] WS reconnect loop with backoff in `polymarket_client/api.py::stream_orderbook`; mirrors `universal_ws._shard_supervisor` pattern; logs disconnect duration and gap on reconnect
+- [x] 4 new unit tests in `tests/test_models.py` cover None, fresh, stale, boundary
 
-**Effort:** S–M. **Expected gain:** correctness, not raw latency — but prevents a class of false-positive opportunities after network blips.
+**Effort:** S–M. **Gain:** correctness (eliminates a class of false-positive opportunities on stale data) + protection against WS flapping (transient blips no longer collapse to 5-min REST cadence).
+
+**Threshold:** 30 s (hardcoded as `_STALENESS_THRESHOLD_NS` per entry point). Tune if false-skip rate is high on illiquid markets — for hunting arbs that live for seconds, anything older is already useless.
 
 ---
 

@@ -17,8 +17,15 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from datetime import datetime
 from typing import Optional
+
+# Skip analyze if the order book hasn't been refreshed in this long.
+# Set to None to disable. 30 s catches WS disconnects and REST poll gaps
+# without false-positives on illiquid markets — for arbs we hunt in
+# seconds-of-edge anyway, a 30+s book is genuinely useless.
+_STALENESS_THRESHOLD_NS: Optional[int] = 30 * 10**9
 
 from polymarket_client import PolymarketClient
 from core import latency
@@ -58,6 +65,7 @@ class TradingBot:
         self._start_time: Optional[datetime] = None
         self._update_count = 0
         self._signal_count = 0
+        self._stale_skips = 0
 
         # Analyze worker task (R2: decouple WS recv from arb_engine.analyze)
         self._analyze_worker_task: Optional[asyncio.Task] = None
@@ -183,6 +191,13 @@ class TradingBot:
                     continue
                 self._update_count += 1
 
+                # R3: skip stale states (WS disconnect, REST poll gap, etc.)
+                if _STALENESS_THRESHOLD_NS is not None and market_state.is_stale(
+                    time.monotonic_ns(), _STALENESS_THRESHOLD_NS
+                ):
+                    self._stale_skips += 1
+                    continue
+
                 if not self.risk_manager.within_global_limits():
                     continue
 
@@ -226,6 +241,7 @@ class TradingBot:
                 logger.info(
                     f"Stats | Updates: {self._update_count} | "
                     f"Signals: {self._signal_count} | "
+                    f"Stale skips: {self._stale_skips} | "
                     f"Orders: {exec_stats.orders_placed} placed, {exec_stats.orders_filled} filled | "
                     f"PnL: ${pnl['total_pnl']:.2f}"
                 )

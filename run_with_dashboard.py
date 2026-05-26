@@ -18,7 +18,12 @@ import logging
 import signal
 import sys
 import threading
+import time
 from datetime import datetime
+from typing import Optional
+
+# R3: skip analyze if order book hasn't refreshed in this long. None disables.
+_STALENESS_THRESHOLD_NS: Optional[int] = 30 * 10**9
 
 import uvicorn
 
@@ -70,6 +75,7 @@ class TradingBotWithDashboard:
 
         # Analyze worker task (R2)
         self._analyze_worker_task = None
+        self._stale_skips = 0
     
     async def start(self) -> None:
         """Start the bot and dashboard."""
@@ -224,6 +230,13 @@ class TradingBotWithDashboard:
                 if market_state is None:
                     continue
 
+                # R3: skip stale states
+                if _STALENESS_THRESHOLD_NS is not None and market_state.is_stale(
+                    time.monotonic_ns(), _STALENESS_THRESHOLD_NS
+                ):
+                    self._stale_skips += 1
+                    continue
+
                 if not self.risk_manager.within_global_limits():
                     continue
 
@@ -254,6 +267,7 @@ class TradingBotWithDashboard:
             try:
                 await asyncio.sleep(interval)
                 logger.info(f"Latency | {latency.summary_line()}")
+                logger.info(f"Stale skips: {self._stale_skips}")
                 try:
                     latency.dump_json("logs/latency.json")
                 except Exception as e:
