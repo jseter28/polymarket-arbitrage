@@ -1,0 +1,980 @@
+{
+  "tested_at": "2026-05-27T02:29:55+00:00",
+  "host": "wss://demo-api.kalshi.co/trade-api/ws/v2",
+  "rest_host": "https://demo-api.kalshi.co/trade-api/v2",
+  "hold_seconds": 8.0,
+  "cooldown_seconds": 2.0,
+  "tickers": [
+    "KXMLBEXTRAS-26MAY292210AZSEA-EXTRAS",
+    "KXMLBGAME-26MAY292210AZSEA-SEA",
+    "KXMLBGAME-26MAY292210AZSEA-AZ"
+  ],
+  "results": [
+    {
+      "n": 1,
+      "handshakes_ok": 1,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 4,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.58
+        }
+      ]
+    },
+    {
+      "n": 2,
+      "handshakes_ok": 2,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 8,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.61
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.6
+        }
+      ]
+    },
+    {
+      "n": 3,
+      "handshakes_ok": 3,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 12,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.58
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.6
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.59
+        }
+      ]
+    },
+    {
+      "n": 4,
+      "handshakes_ok": 4,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 16,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.62
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.61
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.58
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.61
+        }
+      ]
+    },
+    {
+      "n": 5,
+      "handshakes_ok": 5,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 20,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.61
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.59
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.56
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.62
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.62
+        }
+      ]
+    },
+    {
+      "n": 6,
+      "handshakes_ok": 6,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 24,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.63
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.57
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.63
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.63
+        }
+      ]
+    },
+    {
+      "n": 7,
+      "handshakes_ok": 7,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 56,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.58
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.63
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 8,
+          "snapshot_count": 3,
+          "delta_count": 4,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        }
+      ]
+    },
+    {
+      "n": 8,
+      "handshakes_ok": 8,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 32,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.6
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        },
+        {
+          "conn_id": 8,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.64
+        }
+      ]
+    },
+    {
+      "n": 9,
+      "handshakes_ok": 9,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 36,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.6
+        },
+        {
+          "conn_id": 8,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 9,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.65
+        }
+      ]
+    },
+    {
+      "n": 10,
+      "handshakes_ok": 10,
+      "rejected": 0,
+      "errors": 0,
+      "total_messages": 40,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.61
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.72
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 8,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.66
+        },
+        {
+          "conn_id": 9,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 10,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.68
+        }
+      ]
+    },
+    {
+      "n": 11,
+      "handshakes_ok": 10,
+      "rejected": 1,
+      "errors": 0,
+      "total_messages": 40,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 4,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.72
+        },
+        {
+          "conn_id": 8,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.72
+        },
+        {
+          "conn_id": 9,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.73
+        },
+        {
+          "conn_id": 10,
+          "handshake": "rejected",
+          "subscribe_ack": false,
+          "messages": 0,
+          "snapshot_count": 0,
+          "delta_count": 0,
+          "error": "HTTP 429",
+          "close_code": null,
+          "elapsed_s": 0.6
+        },
+        {
+          "conn_id": 11,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.71
+        }
+      ]
+    },
+    {
+      "n": 12,
+      "handshakes_ok": 10,
+      "rejected": 2,
+      "errors": 0,
+      "total_messages": 40,
+      "connections": [
+        {
+          "conn_id": 1,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.63
+        },
+        {
+          "conn_id": 2,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.68
+        },
+        {
+          "conn_id": 3,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.68
+        },
+        {
+          "conn_id": 4,
+          "handshake": "rejected",
+          "subscribe_ack": false,
+          "messages": 0,
+          "snapshot_count": 0,
+          "delta_count": 0,
+          "error": "HTTP 429",
+          "close_code": null,
+          "elapsed_s": 0.56
+        },
+        {
+          "conn_id": 5,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.69
+        },
+        {
+          "conn_id": 6,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.69
+        },
+        {
+          "conn_id": 7,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.69
+        },
+        {
+          "conn_id": 8,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.69
+        },
+        {
+          "conn_id": 9,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 10,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.69
+        },
+        {
+          "conn_id": 11,
+          "handshake": "ok",
+          "subscribe_ack": true,
+          "messages": 4,
+          "snapshot_count": 3,
+          "delta_count": 0,
+          "error": null,
+          "close_code": null,
+          "elapsed_s": 8.67
+        },
+        {
+          "conn_id": 12,
+          "handshake": "rejected",
+          "subscribe_ack": false,
+          "messages": 0,
+          "snapshot_count": 0,
+          "delta_count": 0,
+          "error": "HTTP 429",
+          "close_code": null,
+          "elapsed_s": 0.55
+        }
+      ]
+    }
+  ]
+}

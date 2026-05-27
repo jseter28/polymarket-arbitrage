@@ -53,19 +53,25 @@ The smoke test now defaults to the demo host and accepts `--base-url` to point e
 
 ---
 
-## Phase 1 — Connection cap probe
+## Phase 1 — Connection cap probe — ✅ COMPLETE
 
-**Where:** new `probe_kalshi_ws_connections.py`.
-
-**Goal:** Empirically confirm the community-reported ~5 concurrent conns/user cap. Avoid extrapolation from undocumented limits.
+**Where:** `probe_kalshi_connections.py`. Output: `probe_kalshi_connections.json`.
 
 **Tasks:**
-- [ ] Script opens N authenticated WS connections sequentially (N=1..8), each subscribing to a small ticker set (5 markets).
-- [ ] Observe: which N triggers server-side rejection (close code, error message). Log the exact failure mode.
-- [ ] Output: `probe_kalshi_connections.json` with per-N result (accepted | rejected, server message), plus a one-line summary in the log.
-- [ ] Record close codes / error payloads in the result file — useful when designing reconnect logic later.
+- [x] Script opens N concurrent authenticated WS connections (N=1..12), each subscribing to 3 demo tickers via `orderbook_delta`.
+- [x] Per-iteration: handshake count, rejection count, premature closes, message totals — all written to JSON.
+- [x] Found rejection signal: **HTTP 429** on the handshake (not a close code; rejection is at connection-establishment time).
 
-**Effort:** S. **Gain:** confirmed max conn count → drives the default+max conn pool size in Phase 4.
+**Result (2026-05-26, demo host):**
+- N=1..10 → all handshakes accepted, all subscribes ACK'd, snapshots received.
+- N=11 → 10 of 11 accepted; 11th rejected with `HTTP 429`.
+- N=12 → 10 of 12 accepted; 2 rejected with `HTTP 429`.
+- **Demo concurrent-connection cap = 10, hard, signaled with HTTP 429.**
+- Community-reported "5 concurrent conns" not corroborated on demo. Production may still enforce 5 — verify when prod creds arrive (re-run with `--base-ws wss://api.elections.kalshi.com/trade-api/ws/v2`).
+
+**Phase 4 implication:** Pool default of 3 / max 5 still right under the assumption prod is stricter. Demo allows headroom up to 10 if Phase 2 needs more parallelism for the instrument-cap probe.
+
+**Effort:** S. **Gain:** confirmed conn cap → sizing for Phase 4 pool.
 
 ---
 
