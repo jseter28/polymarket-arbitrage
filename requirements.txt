@@ -9,6 +9,9 @@ aiohttp>=3.9.0
 # Configuration
 pyyaml>=6.0.1
 
+# Cryptography (Kalshi RSA-PSS auth signing)
+cryptography>=42.0.0
+
 # Data validation (optional but recommended)
 pydantic>=2.5.0
 
