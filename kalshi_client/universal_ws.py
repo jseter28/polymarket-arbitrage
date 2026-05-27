@@ -60,6 +60,16 @@ SHORT_SESSION_THRESHOLD_S = 5.0
 OPEN_FAILED_BACKOFF_CAP_S = 30
 DEFAULT_RECONNECT_BACKOFF_S = 1.0
 
+# market_lifecycle_v2 events: which trigger add/remove on our side.
+# (Exact strings per Kalshi docs; live smoke will confirm.)
+LIFECYCLE_ADD_EVENTS = frozenset({"market_created", "market_activated"})
+LIFECYCLE_REMOVE_EVENTS = frozenset(
+    {"market_deactivated", "market_settled", "market_determined"}
+)
+
+# REST safety-net reconcile cadence.
+DEFAULT_RECONCILE_INTERVAL_S = 900.0
+
 
 def _partition_by_hash(tickers: list[str], conn_count: int) -> list[list[str]]:
     """
@@ -86,6 +96,7 @@ class KalshiConnState:
     state: str = "init"  # init|connecting|connected|reconnecting|quarantined|stopped
     sid: int | None = None
     last_seq: int | None = None
+    lifecycle_sid: int | None = None  # set on conn 0 after lifecycle subscribe
     session_count: int = 0
     message_count: int = 0
     bytes_received: int = 0
@@ -93,6 +104,9 @@ class KalshiConnState:
     delta_count: int = 0
     seq_gap_count: int = 0
     snapshot_resync_count: int = 0
+    lifecycle_event_count: int = 0
+    lifecycle_add_count: int = 0
+    lifecycle_remove_count: int = 0
     last_msg_monotonic: float = 0.0
     last_disconnect_reason: str | None = None
     last_open_failure: str | None = None
@@ -113,6 +127,7 @@ class KalshiConnState:
             "state": self.state,
             "sid": self.sid,
             "last_seq": self.last_seq,
+            "lifecycle_sid": self.lifecycle_sid,
             "session_count": self.session_count,
             "message_count": self.message_count,
             "bytes_received": self.bytes_received,
@@ -120,6 +135,9 @@ class KalshiConnState:
             "delta_count": self.delta_count,
             "seq_gap_count": self.seq_gap_count,
             "snapshot_resync_count": self.snapshot_resync_count,
+            "lifecycle_event_count": self.lifecycle_event_count,
+            "lifecycle_add_count": self.lifecycle_add_count,
+            "lifecycle_remove_count": self.lifecycle_remove_count,
             "last_msg_age_s": last_msg_age_s,
             "last_disconnect_reason": self.last_disconnect_reason,
             "last_open_failure": self.last_open_failure,
@@ -157,6 +175,7 @@ class KalshiUniversalWS:
         base_rest: str = DEFAULT_BASE_REST,
         conn_count: int = 3,
         queue_maxsize: int = 10000,
+        reconcile_interval_s: float = DEFAULT_RECONCILE_INTERVAL_S,
     ) -> None:
         if conn_count < 1 or conn_count > MAX_CONN_COUNT:
             raise ValueError(
@@ -195,6 +214,16 @@ class KalshiUniversalWS:
         # Per-conn live WS handle. Set by _run_conn_session when conn is open;
         # cleared on disconnect. Used by _resync_conn to send recovery commands.
         self._conn_ws: list[Any] = [None] * conn_count
+
+        # Reconcile loop config + telemetry.
+        self._reconcile_interval_s = reconcile_interval_s
+        self._reconcile_task: Optional[asyncio.Task] = None
+        self._reconcile_count = 0
+        self._reconcile_last_added = 0
+        self._reconcile_last_removed = 0
+        # Monotonically increasing correlation id for outbound commands.
+        # 0 is reserved by Kalshi ("treated as no id"); start at 1.
+        self._cmd_id_seq = 1
 
     # ------------------------------------------------------------------
     # Internal data path — exercised by unit tests.
@@ -321,9 +350,139 @@ class KalshiUniversalWS:
         state = self._conn_state[conn_id]
         state.sid = None
         state.last_seq = None
+        state.lifecycle_sid = None
         state.first_msg_received = False
         state.last_disconnect_reason = reason
         self._conn_ws[conn_id] = None
+
+    def _next_cmd_id(self) -> int:
+        self._cmd_id_seq += 1
+        return self._cmd_id_seq
+
+    def _prepare_add(self, conn_id: int, ticker: str) -> Optional[dict]:
+        """
+        Synchronously update internal state to reflect a new subscription on
+        `conn_id`. Returns the JSON command to send to that conn's WS, or
+        None if the conn isn't ready (or the ticker is already subscribed).
+        """
+        if conn_id < 0 or conn_id >= self._conn_count:
+            return None
+        ws = self._conn_ws[conn_id]
+        state = self._conn_state[conn_id]
+        if ws is None or state.sid is None:
+            return None
+        if ticker in self._ticker_to_conn:
+            return None
+        self._ticker_to_conn[ticker] = conn_id
+        self._conn_tickers[conn_id].append(ticker)
+        state.tickers += 1
+        return {
+            "id": self._next_cmd_id(),
+            "cmd": "update_subscription",
+            "params": {
+                "sids": [state.sid],
+                "market_tickers": [ticker],
+                "action": "add_markets",
+            },
+        }
+
+    def _prepare_remove(self, conn_id: int, ticker: str) -> Optional[dict]:
+        """
+        Synchronously remove `ticker` from `conn_id`'s subscription state and
+        drop its book. Returns the JSON command to send, or None if the conn
+        isn't ready or the ticker isn't currently subscribed.
+        """
+        if conn_id < 0 or conn_id >= self._conn_count:
+            return None
+        ws = self._conn_ws[conn_id]
+        state = self._conn_state[conn_id]
+        if ws is None or state.sid is None:
+            return None
+        if ticker not in self._ticker_to_conn:
+            return None
+        del self._ticker_to_conn[ticker]
+        try:
+            self._conn_tickers[conn_id].remove(ticker)
+        except ValueError:
+            pass
+        self._books.pop(ticker, None)
+        state.tickers = max(0, state.tickers - 1)
+        return {
+            "id": self._next_cmd_id(),
+            "cmd": "update_subscription",
+            "params": {
+                "sids": [state.sid],
+                "market_tickers": [ticker],
+                "action": "delete_markets",
+            },
+        }
+
+    def _schedule_send(self, conn_id: int, cmd: dict) -> None:
+        """Fire-and-forget async send. No-op if no running loop (unit tests)."""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._send_cmd(conn_id, cmd))
+
+    async def _send_cmd(self, conn_id: int, cmd: dict) -> None:
+        ws = self._conn_ws[conn_id]
+        if ws is None:
+            return
+        try:
+            await ws.send(json.dumps(cmd))
+        except Exception as e:
+            logger.warning(f"conn#{conn_id} _send_cmd failed: {e}")
+
+    def _handle_lifecycle_event(self, raw_msg: dict) -> None:
+        """
+        Dispatch a market_lifecycle_v2 event. Called synchronously from
+        _route_message. Updates per-conn telemetry and, for add/remove
+        events, schedules the corresponding update_subscription command.
+
+        Lifecycle events arrive on conn 0 (the conn that holds the
+        lifecycle subscription); the affected ticker lives on whichever
+        conn hash(ticker) % conn_count selects.
+        """
+        state0 = self._conn_state[0]
+        state0.lifecycle_event_count += 1
+
+        body = raw_msg.get("msg") or {}
+        ticker = body.get("market_ticker")
+        event_type = raw_msg.get("type", "")
+        if not ticker:
+            return
+
+        if event_type in LIFECYCLE_ADD_EVENTS:
+            target_cid = zlib.crc32(ticker.encode("utf-8")) % self._conn_count
+            cmd = self._prepare_add(target_cid, ticker)
+            if cmd is not None:
+                self._conn_state[target_cid].lifecycle_add_count += 1
+                self._schedule_send(target_cid, cmd)
+            return
+
+        if event_type in LIFECYCLE_REMOVE_EVENTS:
+            owner_cid = self._ticker_to_conn.get(ticker)
+            if owner_cid is None:
+                return
+            cmd = self._prepare_remove(owner_cid, ticker)
+            if cmd is not None:
+                self._conn_state[owner_cid].lifecycle_remove_count += 1
+                self._schedule_send(owner_cid, cmd)
+            return
+
+        # Other event types (metadata_updated, close_date_updated, etc.):
+        # telemetry only; no subscription change.
+
+    def _compute_reconcile_diff(
+        self, rest_tickers: list[str]
+    ) -> tuple[list[str], list[str]]:
+        """Given the REST-truth set of open tickers, return (adds, removes)."""
+        current = set(self._ticker_to_conn.keys())
+        truth = set(rest_tickers)
+        adds = sorted(truth - current)
+        removes = sorted(current - truth)
+        return adds, removes
 
     def _route_message(self, conn_id: int, raw_msg: dict) -> None:
         """
@@ -340,8 +499,14 @@ class KalshiUniversalWS:
         if mtype == "subscribed":
             # sid nests under msg.sid (Phase 2 found this the hard way).
             sub_msg = raw_msg.get("msg") or {}
-            state.sid = sub_msg.get("sid")
-            logger.info(f"conn#{conn_id} subscribed sid={state.sid}")
+            sid = sub_msg.get("sid")
+            channel = sub_msg.get("channel")
+            if channel == "market_lifecycle_v2":
+                state.lifecycle_sid = sid
+                logger.info(f"conn#{conn_id} lifecycle subscribed sid={sid}")
+            else:
+                state.sid = sid
+                logger.info(f"conn#{conn_id} subscribed sid={sid}")
             return
 
         if mtype == "ok" or mtype == "subscription_updated":
@@ -383,6 +548,10 @@ class KalshiUniversalWS:
                     pass
                 else:
                     loop.create_task(self._resync_conn(conn_id))
+            return
+
+        if isinstance(mtype, str) and mtype.startswith("market_"):
+            self._handle_lifecycle_event(raw_msg)
             return
 
         # Unknown / unhandled message type.
@@ -475,6 +644,9 @@ class KalshiUniversalWS:
             "queue_depth": self._queue.qsize(),
             "queue_maxsize": self._queue_maxsize,
             "drops": self._drops,
+            "reconcile_count": self._reconcile_count,
+            "reconcile_last_added": self._reconcile_last_added,
+            "reconcile_last_removed": self._reconcile_last_removed,
             "shards": [s.to_dict() for s in self._conn_state],
         }
 
@@ -516,6 +688,12 @@ class KalshiUniversalWS:
             task = asyncio.create_task(self._conn_supervisor(cid, tickers))
             self._supervisor_tasks.append(task)
 
+        # REST safety-net reconcile loop. Keeps the subscribed set in sync
+        # with /markets?status=open when lifecycle events are missed
+        # (notably KXMVE-prefixed markets — they are excluded from the
+        # market_lifecycle_v2 channel per Kalshi docs).
+        self._reconcile_task = asyncio.create_task(self._reconcile_loop())
+
         logger.info(
             f"KalshiUniversalWS started: {self._conn_count} conns, "
             f"{len(market_tickers)} tickers total"
@@ -528,10 +706,57 @@ class KalshiUniversalWS:
         self._stop_event.set()
         for t in self._supervisor_tasks:
             t.cancel()
+        if self._reconcile_task is not None:
+            self._reconcile_task.cancel()
         if self._supervisor_tasks:
             await asyncio.gather(*self._supervisor_tasks, return_exceptions=True)
+        if self._reconcile_task is not None:
+            await asyncio.gather(self._reconcile_task, return_exceptions=True)
+            self._reconcile_task = None
         self._supervisor_tasks.clear()
         self._started = False
+
+    async def _reconcile_loop(self) -> None:
+        """Periodic REST reconcile. Exits cleanly when stop_event is set."""
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=self._reconcile_interval_s
+                )
+                return  # stop signaled
+            except asyncio.TimeoutError:
+                pass
+            try:
+                await self._reconcile_loop_once()
+            except Exception as e:
+                logger.exception(f"reconcile cycle failed: {e}")
+
+    async def _reconcile_loop_once(self) -> None:
+        """One cycle of REST reconcile. Public for smoke verification."""
+        rest_tickers = await self._fetch_open_market_tickers()
+        adds, removes = self._compute_reconcile_diff(rest_tickers)
+        self._reconcile_count += 1
+        self._reconcile_last_added = 0
+        self._reconcile_last_removed = 0
+        for ticker in adds:
+            target_cid = zlib.crc32(ticker.encode("utf-8")) % self._conn_count
+            cmd = self._prepare_add(target_cid, ticker)
+            if cmd is not None:
+                self._reconcile_last_added += 1
+                self._schedule_send(target_cid, cmd)
+        for ticker in removes:
+            owner_cid = self._ticker_to_conn.get(ticker)
+            if owner_cid is None:
+                continue
+            cmd = self._prepare_remove(owner_cid, ticker)
+            if cmd is not None:
+                self._reconcile_last_removed += 1
+                self._schedule_send(owner_cid, cmd)
+        logger.info(
+            f"reconcile #{self._reconcile_count}: "
+            f"added={self._reconcile_last_added} "
+            f"removed={self._reconcile_last_removed}"
+        )
 
     # ------------------------------------------------------------------
     # Lifecycle — internal.
@@ -613,7 +838,9 @@ class KalshiUniversalWS:
                 backoff: float
                 if reason.startswith("open_failed"):
                     open_failure_streak += 1
-                    backoff = float(self._compute_open_failed_backoff(open_failure_streak))
+                    backoff = float(
+                        self._compute_open_failed_backoff(open_failure_streak)
+                    )
                 else:
                     open_failure_streak = 0
                     backoff = DEFAULT_RECONNECT_BACKOFF_S
@@ -735,6 +962,21 @@ class KalshiUniversalWS:
                                 }
                             )
                         )
+
+            # On conn 0, also subscribe to market_lifecycle_v2 so we receive
+            # activated/deactivated/settled events. Separate channel = separate
+            # sid (captured into state.lifecycle_sid by _route_message on the
+            # subscribed ack).
+            if conn_id == 0:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": self._next_cmd_id(),
+                            "cmd": "subscribe",
+                            "params": {"channels": ["market_lifecycle_v2"]},
+                        }
+                    )
+                )
 
             # Main recv loop.
             async for raw in ws:

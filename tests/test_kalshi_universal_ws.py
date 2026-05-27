@@ -625,3 +625,228 @@ class TestBackoff:
         assert ws._compute_open_failed_backoff(streak=5) == 16
         assert ws._compute_open_failed_backoff(streak=6) == 30
         assert ws._compute_open_failed_backoff(streak=10) == 30
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Lifecycle + Reconcile
+# ---------------------------------------------------------------------------
+
+
+class _FakeWS:
+    """Recording stub for self._conn_ws[cid] in unit tests."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.closed = False
+
+    async def send(self, payload: str) -> None:
+        self.sent.append(payload)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+def _seed_conn_ready(ws: KalshiUniversalWS, conn_id: int, sid: int = 1) -> _FakeWS:
+    """Pretend conn `conn_id` is open and subscribed with `sid`."""
+    fake = _FakeWS()
+    ws._conn_ws[conn_id] = fake
+    ws._conn_state[conn_id].sid = sid
+    ws._conn_state[conn_id].state = "connected"
+    return fake
+
+
+class TestPrepareAddRemove:
+    def test_prepare_add_returns_none_when_conn_not_ready(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        # conn 0 has no ws/sid
+        assert ws._prepare_add(conn_id=0, ticker="KX-NEW") is None
+        assert "KX-NEW" not in ws._ticker_to_conn
+
+    def test_prepare_add_updates_state_and_returns_cmd(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=7)
+        cmd = ws._prepare_add(conn_id=0, ticker="KX-NEW")
+        assert cmd is not None
+        assert cmd["cmd"] == "update_subscription"
+        assert cmd["params"]["sids"] == [7]
+        assert cmd["params"]["market_tickers"] == ["KX-NEW"]
+        assert cmd["params"]["action"] == "add_markets"
+        assert ws._ticker_to_conn["KX-NEW"] == 0
+        assert "KX-NEW" in ws._conn_tickers[0]
+        assert ws._conn_state[0].tickers == 1
+
+    def test_prepare_add_is_idempotent_for_already_subscribed(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=1)
+        ws._prepare_add(0, "KX-X")
+        # second call returns None and does NOT re-add
+        assert ws._prepare_add(0, "KX-X") is None
+        assert ws._conn_state[0].tickers == 1
+
+    def test_prepare_remove_returns_none_for_unknown_ticker(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=1)
+        assert ws._prepare_remove(0, "KX-NOPE") is None
+
+    def test_prepare_remove_drops_state_and_book(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=4)
+        ws._prepare_add(0, "KX-R")
+        # seed a book for that ticker
+        ws._apply_snapshot(
+            conn_id=0,
+            msg={
+                "type": "orderbook_snapshot",
+                "sid": 4,
+                "seq": 1,
+                "msg": {"market_ticker": "KX-R", "yes_dollars_fp": [["0.5", "1"]]},
+            },
+        )
+        assert "KX-R" in ws._books
+
+        cmd = ws._prepare_remove(0, "KX-R")
+        assert cmd is not None
+        assert cmd["params"]["action"] == "delete_markets"
+        assert cmd["params"]["market_tickers"] == ["KX-R"]
+        assert "KX-R" not in ws._ticker_to_conn
+        assert "KX-R" not in ws._books
+        assert "KX-R" not in ws._conn_tickers[0]
+
+
+class TestLifecycleEventHandling:
+    def test_handle_lifecycle_activated_dispatches_add(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=3)
+        # All 3 conns ready so any hash target works.
+        for cid in range(3):
+            _seed_conn_ready(ws, cid, sid=1)
+        ws._handle_lifecycle_event(
+            {
+                "type": "market_activated",
+                "sid": 99,
+                "seq": 1,
+                "msg": {"market_ticker": "KXNBA-NEW"},
+            }
+        )
+        # ticker assigned to its hash-target conn
+        assert "KXNBA-NEW" in ws._ticker_to_conn
+        target = ws._ticker_to_conn["KXNBA-NEW"]
+        assert ws._conn_state[target].lifecycle_add_count == 1
+        assert ws._conn_state[0].lifecycle_event_count == 1
+
+    def test_handle_lifecycle_settled_dispatches_remove(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=2)
+        for cid in range(2):
+            _seed_conn_ready(ws, cid, sid=1)
+        # Pre-add a ticker that will then be settled.
+        target = zlib_crc32_mod("KXOLD", 2)
+        ws._prepare_add(target, "KXOLD")
+        ws._apply_snapshot(
+            conn_id=target,
+            msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {"market_ticker": "KXOLD", "yes_dollars_fp": [["0.5", "1"]]},
+            },
+        )
+        assert "KXOLD" in ws._books
+
+        ws._handle_lifecycle_event(
+            {
+                "type": "market_settled",
+                "sid": 99,
+                "seq": 5,
+                "msg": {"market_ticker": "KXOLD"},
+            }
+        )
+        assert "KXOLD" not in ws._ticker_to_conn
+        assert "KXOLD" not in ws._books
+        assert ws._conn_state[target].lifecycle_remove_count == 1
+
+    def test_handle_lifecycle_metadata_update_telemetry_only(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=1)
+        ws._prepare_add(0, "KX-A")
+        ws._handle_lifecycle_event(
+            {
+                "type": "market_metadata_updated",
+                "sid": 99,
+                "seq": 3,
+                "msg": {"market_ticker": "KX-A"},
+            }
+        )
+        # No add/remove side-effects.
+        assert ws._conn_state[0].lifecycle_event_count == 1
+        assert ws._conn_state[0].lifecycle_add_count == 0
+        assert ws._conn_state[0].lifecycle_remove_count == 0
+        # ticker still subscribed
+        assert "KX-A" in ws._ticker_to_conn
+
+    def test_handle_lifecycle_unknown_event_ignored(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=1)
+        # Made-up event type. Should not crash; should count as one event.
+        ws._handle_lifecycle_event(
+            {
+                "type": "market_made_up_event",
+                "sid": 99,
+                "seq": 1,
+                "msg": {"market_ticker": "KXNEW"},
+            }
+        )
+        assert ws._conn_state[0].lifecycle_event_count == 1
+        assert "KXNEW" not in ws._ticker_to_conn
+
+    def test_route_message_dispatches_market_prefixed_to_lifecycle(
+        self, rsa_key
+    ) -> None:
+        """Any type that starts with 'market_' goes to the lifecycle handler."""
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_conn_ready(ws, 0, sid=1)
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "market_activated",
+                "sid": 99,
+                "seq": 1,
+                "msg": {"market_ticker": "KXLIFE"},
+            },
+        )
+        assert ws._conn_state[0].lifecycle_event_count == 1
+
+
+class TestReconcileDiff:
+    def test_reconcile_diff_adds_and_removes(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=2)
+        for cid in range(2):
+            _seed_conn_ready(ws, cid, sid=1)
+        # Currently subscribed: A, B, C
+        for t in ["A", "B", "C"]:
+            ws._prepare_add(conn_id=zlib_crc32_mod(t, 2), ticker=t)
+        # REST says we should have: B, C, D, E
+        rest_tickers = ["B", "C", "D", "E"]
+        adds, removes = ws._compute_reconcile_diff(rest_tickers)
+        assert sorted(adds) == ["D", "E"]
+        assert removes == ["A"]
+
+
+class TestLifecycleTelemetry:
+    def test_status_includes_lifecycle_and_reconcile_keys(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=2)
+        s = ws.status()
+        assert "reconcile_count" in s
+        for shard in s["shards"]:
+            for key in (
+                "lifecycle_sid",
+                "lifecycle_event_count",
+                "lifecycle_add_count",
+                "lifecycle_remove_count",
+            ):
+                assert key in shard, f"missing per-shard key: {key}"
+
+
+def zlib_crc32_mod(ticker: str, n: int) -> int:
+    """Mirror of the partition function so tests can predict assignments."""
+    import zlib
+
+    return zlib.crc32(ticker.encode("utf-8")) % n
