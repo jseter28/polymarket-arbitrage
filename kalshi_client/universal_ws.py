@@ -23,15 +23,21 @@ seq-gap recovery is layered in subsequent work.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import random
 import time
 import zlib
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
+import httpx
+import websockets
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from websockets.exceptions import ConnectionClosed
 
+from kalshi_client.auth import build_headers
 from kalshi_client.models import KalshiOrderBook
 from polymarket_client.models import OrderBook, PriceLevel
 
@@ -39,9 +45,20 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_BASE_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
 DEFAULT_BASE_REST = "https://demo-api.kalshi.co/trade-api/v2"
+WS_PATH = "/trade-api/ws/v2"  # used in signing string
 
 # Demo cap is 10; reserve headroom for ad-hoc dev sessions.
 MAX_CONN_COUNT = 9
+
+# Subscribe / update_subscription batching size (Phase 2 confirmed 500 works).
+SUBSCRIBE_BATCH_SIZE = 500
+
+# Quarantine threshold: 3 consecutive short sessions (< 5s) triggers 60s sleep.
+QUARANTINE_THRESHOLD = 3
+QUARANTINE_BACKOFF_S = 60.0
+SHORT_SESSION_THRESHOLD_S = 5.0
+OPEN_FAILED_BACKOFF_CAP_S = 30
+DEFAULT_RECONNECT_BACKOFF_S = 1.0
 
 
 def _partition_by_hash(tickers: list[str], conn_count: int) -> list[list[str]]:
@@ -175,6 +192,10 @@ class KalshiUniversalWS:
         self._started = False
         self._start_monotonic: float = 0.0
 
+        # Per-conn live WS handle. Set by _run_conn_session when conn is open;
+        # cleared on disconnect. Used by _resync_conn to send recovery commands.
+        self._conn_ws: list[Any] = [None] * conn_count
+
     # ------------------------------------------------------------------
     # Internal data path — exercised by unit tests.
     # ------------------------------------------------------------------
@@ -271,6 +292,107 @@ class KalshiUniversalWS:
         state.delta_count += 1
         return ticker
 
+    def _track_seq(self, conn_id: int, seq: int) -> bool:
+        """
+        Advance the per-conn seq tracker. Returns True if a gap was detected.
+
+        Per Phase 3 findings (tasks/kalshi-seq-semantics.md): seq is per-sid,
+        monotonic, gap-free under normal flow. First message on a fresh sub
+        sets the baseline; subsequent messages must be `last + 1`.
+        """
+        state = self._conn_state[conn_id]
+        if state.last_seq is None:
+            state.last_seq = seq
+            return False
+        if seq == state.last_seq + 1:
+            state.last_seq = seq
+            return False
+        # Gap (forward jump or out-of-order). Record and advance.
+        logger.warning(
+            f"conn#{conn_id} seq gap: prev={state.last_seq} got={seq} "
+            f"(missing {seq - state.last_seq - 1} messages)"
+        )
+        state.seq_gap_count += 1
+        state.last_seq = seq
+        return True
+
+    def _reset_conn_state(self, conn_id: int, reason: str) -> None:
+        """Drop the live state for a conn on disconnect. Book state is preserved."""
+        state = self._conn_state[conn_id]
+        state.sid = None
+        state.last_seq = None
+        state.first_msg_received = False
+        state.last_disconnect_reason = reason
+        self._conn_ws[conn_id] = None
+
+    def _route_message(self, conn_id: int, raw_msg: dict) -> None:
+        """
+        Dispatch a parsed WS frame to the right handler. Single entry point
+        from the recv loop so unit tests and the live supervisor agree.
+        """
+        mtype = raw_msg.get("type")
+        state = self._conn_state[conn_id]
+        state.message_count += 1
+        state.last_msg_monotonic = time.monotonic()
+        if not state.first_msg_received:
+            state.first_msg_received = True
+
+        if mtype == "subscribed":
+            # sid nests under msg.sid (Phase 2 found this the hard way).
+            sub_msg = raw_msg.get("msg") or {}
+            state.sid = sub_msg.get("sid")
+            logger.info(f"conn#{conn_id} subscribed sid={state.sid}")
+            return
+
+        if mtype == "ok" or mtype == "subscription_updated":
+            # Acknowledgement of a subscribe/update_subscription. Already
+            # bumped message_count above.
+            return
+
+        if mtype == "error":
+            err_body = raw_msg.get("msg") or {}
+            reason = f"server error {err_body.get('code')}: {err_body.get('msg')}"
+            logger.warning(f"conn#{conn_id} {reason}")
+            state.last_disconnect_reason = reason
+            return
+
+        if mtype == "orderbook_snapshot":
+            seq = raw_msg.get("seq")
+            if seq is not None:
+                self._track_seq(conn_id, int(seq))
+            ticker = self._apply_snapshot(conn_id, raw_msg)
+            if ticker:
+                self._enqueue_ticker(ticker)
+            return
+
+        if mtype == "orderbook_delta":
+            seq = raw_msg.get("seq")
+            gap_detected = False
+            if seq is not None:
+                gap_detected = self._track_seq(conn_id, int(seq))
+            ticker = self._apply_delta(conn_id, raw_msg)
+            if ticker:
+                self._enqueue_ticker(ticker)
+            if gap_detected:
+                # Fire and forget — resync is non-destructive (seq continues).
+                try:
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    # No running loop (e.g., in unit tests). Skip; the
+                    # supervisor will catch up on next live frame.
+                    pass
+                else:
+                    loop.create_task(self._resync_conn(conn_id))
+            return
+
+        # Unknown / unhandled message type.
+        logger.debug(f"conn#{conn_id} ignored message type={mtype!r}")
+
+    @staticmethod
+    def _compute_open_failed_backoff(streak: int) -> int:
+        """Exponential backoff capped at 30s. streak=1 → 1s, 2→2, ..., 6+→30."""
+        return min(2 ** max(0, streak - 1), OPEN_FAILED_BACKOFF_CAP_S)
+
     def _enqueue_ticker(self, ticker: str) -> None:
         """
         Non-blocking enqueue with drop-oldest semantics on overflow.
@@ -317,6 +439,29 @@ class KalshiUniversalWS:
             return None
         return book.to_unified_orderbook()
 
+    async def iter_updates(self):
+        """
+        Yield (market_id, OrderBook) tuples as books change. Latest-wins
+        coalescing happens implicitly: the consumer always sees the current
+        book state at yield time, not the per-frame state.
+
+        On consumer cancellation, the stop_event is set so supervisors wind
+        down cleanly.
+        """
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    ticker = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+                book = self._books.get(ticker)
+                if book is None:
+                    # Dequeued before any snapshot landed; skip.
+                    continue
+                yield (f"kalshi:{ticker}", book.to_unified_orderbook())
+        finally:
+            self._stop_event.set()
+
     def status(self) -> dict:
         uptime_s = (
             round(time.monotonic() - self._start_monotonic, 2) if self._started else 0.0
@@ -332,3 +477,325 @@ class KalshiUniversalWS:
             "drops": self._drops,
             "shards": [s.to_dict() for s in self._conn_state],
         }
+
+    # ------------------------------------------------------------------
+    # Lifecycle — public.
+    # ------------------------------------------------------------------
+
+    async def start(self, market_tickers: Optional[list[str]] = None) -> None:
+        """
+        Open `conn_count` sharded WS connections, subscribe each to its
+        share of `market_tickers`, and begin streaming snapshots + deltas.
+
+        If `market_tickers` is None, fetches all currently-open markets
+        from the REST API.
+        """
+        if self._started:
+            raise RuntimeError("KalshiUniversalWS.start() called twice")
+
+        if market_tickers is None:
+            market_tickers = await self._fetch_open_market_tickers()
+        if not market_tickers:
+            raise RuntimeError("No market_tickers to subscribe — universe is empty")
+
+        shards = _partition_by_hash(market_tickers, self._conn_count)
+        for cid, sub in enumerate(shards):
+            self._conn_tickers[cid] = list(sub)
+            for t in sub:
+                self._ticker_to_conn[t] = cid
+            self._conn_state[cid].tickers = len(sub)
+
+        self._started = True
+        self._start_monotonic = time.monotonic()
+        self._stop_event.clear()
+
+        for cid in range(self._conn_count):
+            tickers = self._conn_tickers[cid]
+            if not tickers:
+                continue
+            task = asyncio.create_task(self._conn_supervisor(cid, tickers))
+            self._supervisor_tasks.append(task)
+
+        logger.info(
+            f"KalshiUniversalWS started: {self._conn_count} conns, "
+            f"{len(market_tickers)} tickers total"
+        )
+
+    async def stop(self) -> None:
+        """Signal supervisors to shut down, await their exit."""
+        if not self._started:
+            return
+        self._stop_event.set()
+        for t in self._supervisor_tasks:
+            t.cancel()
+        if self._supervisor_tasks:
+            await asyncio.gather(*self._supervisor_tasks, return_exceptions=True)
+        self._supervisor_tasks.clear()
+        self._started = False
+
+    # ------------------------------------------------------------------
+    # Lifecycle — internal.
+    # ------------------------------------------------------------------
+
+    async def _fetch_open_market_tickers(self) -> list[str]:
+        """Page through /markets?status=open and return every active ticker."""
+        tickers: list[str] = []
+        cursor = ""
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while True:
+                params: dict = {"status": "open", "limit": 1000}
+                if cursor:
+                    params["cursor"] = cursor
+                r = await client.get(
+                    f"{self._base_rest}/markets",
+                    params=params,
+                    headers={"Accept": "application/json"},
+                )
+                r.raise_for_status()
+                d = r.json()
+                markets = d.get("markets", [])
+                if not markets:
+                    break
+                tickers.extend(m["ticker"] for m in markets if m.get("ticker"))
+                cursor = d.get("cursor", "")
+                if not cursor:
+                    break
+        return tickers
+
+    async def _conn_supervisor(self, conn_id: int, tickers: list[str]) -> None:
+        """Per-conn reconnect loop: jitter, session, backoff, quarantine."""
+        state = self._conn_state[conn_id]
+        # Spread initial reconnect storms across conns.
+        initial_jitter = random.uniform(0, conn_id * 0.05)
+        if initial_jitter:
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=initial_jitter)
+                return
+            except asyncio.TimeoutError:
+                pass
+
+        open_failure_streak = 0
+        try:
+            while not self._stop_event.is_set():
+                state.session_count += 1
+                logger.info(
+                    f"conn#{conn_id} session #{state.session_count} connecting "
+                    f"({len(tickers)} tickers)"
+                )
+                try:
+                    reason, uptime = await self._run_conn_session(conn_id, tickers)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.exception(f"conn#{conn_id} session crashed: {e}")
+                    reason = f"crash: {type(e).__name__}: {e}"
+                    uptime = 0.0
+                    state.last_disconnect_reason = reason
+
+                self._reset_conn_state(conn_id, reason)
+
+                if self._stop_event.is_set():
+                    state.state = "stopped"
+                    return
+
+                logger.info(
+                    f"conn#{conn_id} session #{state.session_count} "
+                    f"ended after {uptime:.1f}s: {reason}"
+                )
+
+                # Quarantine guard.
+                if uptime < SHORT_SESSION_THRESHOLD_S:
+                    state.short_session_streak += 1
+                else:
+                    state.short_session_streak = 0
+
+                # Backoff schedule.
+                backoff: float
+                if reason.startswith("open_failed"):
+                    open_failure_streak += 1
+                    backoff = float(self._compute_open_failed_backoff(open_failure_streak))
+                else:
+                    open_failure_streak = 0
+                    backoff = DEFAULT_RECONNECT_BACKOFF_S
+
+                if state.short_session_streak >= QUARANTINE_THRESHOLD:
+                    logger.error(
+                        f"conn#{conn_id}: {QUARANTINE_THRESHOLD} consecutive short "
+                        f"sessions; quarantining for {QUARANTINE_BACKOFF_S}s"
+                    )
+                    state.state = "quarantined"
+                    backoff = QUARANTINE_BACKOFF_S
+                    state.short_session_streak = 0
+                else:
+                    state.state = "reconnecting"
+
+                try:
+                    await asyncio.wait_for(self._stop_event.wait(), timeout=backoff)
+                    return
+                except asyncio.TimeoutError:
+                    pass
+        except asyncio.CancelledError:
+            state.state = "stopped"
+            raise
+        except Exception as e:
+            logger.exception(f"conn#{conn_id} supervisor crashed fatally: {e}")
+            state.state = "stopped"
+
+    async def _run_conn_session(
+        self, conn_id: int, tickers: list[str]
+    ) -> tuple[str, float]:
+        """One conn lifetime: handshake → subscribe → recv loop → return."""
+        state = self._conn_state[conn_id]
+        state.state = "connecting"
+        state.connect_attempts += 1
+        started_at = time.monotonic()
+
+        try:
+            headers = build_headers(self._api_key_id, self._private_key, "GET", WS_PATH)
+            ws = await websockets.connect(
+                self._base_ws,
+                extra_headers=headers,
+                open_timeout=20,
+                ping_interval=20,
+                max_size=16 * 1024 * 1024,
+            )
+        except Exception as e:
+            failure = f"open_failed: {type(e).__name__}: {e}"
+            state.last_open_failure = failure
+            logger.warning(f"conn#{conn_id} {failure}")
+            return failure, 0.0
+
+        state.state = "connected"
+        state.connect_successes += 1
+        self._conn_ws[conn_id] = ws
+
+        try:
+            # Initial subscribe — batch tickers if huge.
+            if len(tickers) <= SUBSCRIBE_BATCH_SIZE:
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "cmd": "subscribe",
+                            "params": {
+                                "channels": ["orderbook_delta"],
+                                "market_tickers": tickers,
+                            },
+                        }
+                    )
+                )
+            else:
+                # First batch creates the sid; remaining batches use
+                # update_subscription add_markets once sid is known.
+                first = tickers[:SUBSCRIBE_BATCH_SIZE]
+                await ws.send(
+                    json.dumps(
+                        {
+                            "id": 1,
+                            "cmd": "subscribe",
+                            "params": {
+                                "channels": ["orderbook_delta"],
+                                "market_tickers": first,
+                            },
+                        }
+                    )
+                )
+                # The rest are appended once subscribed ack arrives; do it
+                # eagerly without waiting — Kalshi merges into the existing
+                # sid via update_subscription's `subscribe` semantics. To
+                # keep this simple and correct, we wait briefly for the sid
+                # then add the rest.
+                deadline = time.monotonic() + 5.0
+                while state.sid is None and time.monotonic() < deadline:
+                    try:
+                        raw = await asyncio.wait_for(ws.recv(), timeout=1.0)
+                    except asyncio.TimeoutError:
+                        continue
+                    state.bytes_received += len(raw)
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        continue
+                    self._route_message(conn_id, parsed)
+                if state.sid is not None:
+                    for i in range(
+                        SUBSCRIBE_BATCH_SIZE, len(tickers), SUBSCRIBE_BATCH_SIZE
+                    ):
+                        batch = tickers[i : i + SUBSCRIBE_BATCH_SIZE]
+                        await ws.send(
+                            json.dumps(
+                                {
+                                    "id": 100 + i // SUBSCRIBE_BATCH_SIZE,
+                                    "cmd": "update_subscription",
+                                    "params": {
+                                        "sids": [state.sid],
+                                        "market_tickers": batch,
+                                        "action": "add_markets",
+                                    },
+                                }
+                            )
+                        )
+
+            # Main recv loop.
+            async for raw in ws:
+                if self._stop_event.is_set():
+                    break
+                if isinstance(raw, bytes):
+                    raw = raw.decode("utf-8", errors="replace")
+                state.bytes_received += len(raw)
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    logger.warning(f"conn#{conn_id} non-JSON frame; skipping")
+                    continue
+                self._route_message(conn_id, parsed)
+        except ConnectionClosed as e:
+            uptime = time.monotonic() - started_at
+            return f"ConnectionClosed code={e.code} reason={e.reason!r}", uptime
+        except asyncio.CancelledError:
+            raise
+        finally:
+            self._conn_ws[conn_id] = None
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+        return "loop_exit", time.monotonic() - started_at
+
+    async def _resync_conn(self, conn_id: int) -> None:
+        """
+        Request a fresh snapshot for every ticker on this conn via
+        `update_subscription get_snapshot`. Phase 3 confirmed seq continues
+        (no reset), so this is safe to issue mid-stream.
+        """
+        state = self._conn_state[conn_id]
+        ws = self._conn_ws[conn_id]
+        if ws is None or state.sid is None:
+            return  # Conn not live; supervisor will rebuild from scratch on reconnect.
+
+        tickers = list(self._conn_tickers[conn_id])
+        if not tickers:
+            return
+
+        state.snapshot_resync_count += 1
+        logger.warning(
+            f"conn#{conn_id} requesting resync for {len(tickers)} tickers "
+            f"(gap_count={state.seq_gap_count})"
+        )
+        for i in range(0, len(tickers), SUBSCRIBE_BATCH_SIZE):
+            batch = tickers[i : i + SUBSCRIBE_BATCH_SIZE]
+            cmd = {
+                "id": 900 + i // SUBSCRIBE_BATCH_SIZE,
+                "cmd": "update_subscription",
+                "params": {
+                    "sids": [state.sid],
+                    "market_tickers": batch,
+                    "action": "get_snapshot",
+                },
+            }
+            try:
+                await ws.send(json.dumps(cmd))
+            except Exception as e:
+                logger.warning(f"conn#{conn_id} resync send failed: {e}")
+                return

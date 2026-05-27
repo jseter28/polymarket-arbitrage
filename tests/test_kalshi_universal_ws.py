@@ -435,3 +435,193 @@ class TestStatus:
                 "snapshot_resync_count",
             ):
                 assert key in shard, f"missing per-shard key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# Sequence tracking + gap detection
+# ---------------------------------------------------------------------------
+
+
+class TestSeqTracking:
+    def test_first_message_sets_last_seq_no_gap(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        gap = ws._track_seq(conn_id=0, seq=1)
+        assert gap is False
+        assert ws._conn_state[0].last_seq == 1
+        assert ws._conn_state[0].seq_gap_count == 0
+
+    def test_monotonic_seq_advances_without_gap(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        for s in range(1, 6):
+            assert ws._track_seq(conn_id=0, seq=s) is False
+        assert ws._conn_state[0].last_seq == 5
+        assert ws._conn_state[0].seq_gap_count == 0
+
+    def test_gap_detected_when_seq_skips_forward(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        ws._track_seq(conn_id=0, seq=1)
+        ws._track_seq(conn_id=0, seq=2)
+        gap = ws._track_seq(conn_id=0, seq=5)  # 3 and 4 missing
+        assert gap is True
+        assert ws._conn_state[0].seq_gap_count == 1
+        # last_seq advances to the new value despite the gap.
+        assert ws._conn_state[0].last_seq == 5
+
+    def test_seq_resets_to_none_on_disconnect_reset(self, rsa_key) -> None:
+        """When a conn is reset (disconnect), last_seq → None; next seq accepted."""
+        ws = _mk_ws(rsa_key, conn_count=1)
+        ws._track_seq(conn_id=0, seq=10)
+        ws._reset_conn_state(conn_id=0, reason="test")
+        assert ws._conn_state[0].last_seq is None
+        # Fresh sub starts at seq=1; not a gap.
+        assert ws._track_seq(conn_id=0, seq=1) is False
+
+
+# ---------------------------------------------------------------------------
+# Message routing
+# ---------------------------------------------------------------------------
+
+
+class TestRouteMessage:
+    def test_subscribed_ack_extracts_sid_from_nested_msg(self, rsa_key) -> None:
+        """subscribed ack puts sid inside `msg.sid`, not at the top level."""
+        ws = _mk_ws(rsa_key, conn_count=1)
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "subscribed",
+                "id": 1,
+                "msg": {"channel": "orderbook_delta", "sid": 7},
+            },
+        )
+        assert ws._conn_state[0].sid == 7
+
+    def test_snapshot_routed_to_apply_snapshot(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_assignment(ws, ["KX-R1"])
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {
+                    "market_ticker": "KX-R1",
+                    "yes_dollars_fp": [["0.50", "10.00"]],
+                },
+            },
+        )
+        assert "KX-R1" in ws._books
+        assert ws._conn_state[0].snapshot_count == 1
+
+    def test_delta_routed_to_apply_delta(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_assignment(ws, ["KX-R2"])
+        # Seed snapshot first.
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {
+                    "market_ticker": "KX-R2",
+                    "yes_dollars_fp": [["0.50", "10.00"]],
+                },
+            },
+        )
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_delta",
+                "sid": 1,
+                "seq": 2,
+                "msg": {
+                    "market_ticker": "KX-R2",
+                    "price_dollars": "0.50",
+                    "delta_fp": "5.00",
+                    "side": "yes",
+                },
+            },
+        )
+        assert ws._conn_state[0].delta_count == 1
+        assert ws._books["KX-R2"].yes_bids[0].size == 15.0
+
+    def test_error_message_logged_and_stored(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "error",
+                "id": 99,
+                "msg": {"code": 7, "msg": "Unknown subscription ID"},
+            },
+        )
+        assert ws._conn_state[0].last_disconnect_reason is not None
+        assert "Unknown subscription ID" in ws._conn_state[0].last_disconnect_reason
+
+    def test_routed_message_enqueues_ticker(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_assignment(ws, ["KX-Q"])
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {
+                    "market_ticker": "KX-Q",
+                    "yes_dollars_fp": [["0.30", "1.00"]],
+                },
+            },
+        )
+        # Queue should contain the ticker for iter_updates consumption.
+        assert ws._queue.qsize() == 1
+
+    def test_gap_in_routed_messages_increments_gap_count(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_assignment(ws, ["KX-G"])
+        # First message ok.
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {"market_ticker": "KX-G", "yes_dollars_fp": [["0.5", "1"]]},
+            },
+        )
+        # Skip seq 2-4, jump to 5.
+        ws._route_message(
+            conn_id=0,
+            raw_msg={
+                "type": "orderbook_delta",
+                "sid": 1,
+                "seq": 5,
+                "msg": {
+                    "market_ticker": "KX-G",
+                    "price_dollars": "0.5",
+                    "delta_fp": "1",
+                    "side": "yes",
+                },
+            },
+        )
+        assert ws._conn_state[0].seq_gap_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Backoff schedule (offline)
+# ---------------------------------------------------------------------------
+
+
+class TestBackoff:
+    def test_open_failure_streak_exponential_capped_at_30(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        # streak 1 → 1s, 2 → 2s, 3 → 4s, 4 → 8s, 5 → 16s, 6 → 30s (capped)
+        assert ws._compute_open_failed_backoff(streak=1) == 1
+        assert ws._compute_open_failed_backoff(streak=2) == 2
+        assert ws._compute_open_failed_backoff(streak=3) == 4
+        assert ws._compute_open_failed_backoff(streak=4) == 8
+        assert ws._compute_open_failed_backoff(streak=5) == 16
+        assert ws._compute_open_failed_backoff(streak=6) == 30
+        assert ws._compute_open_failed_backoff(streak=10) == 30
