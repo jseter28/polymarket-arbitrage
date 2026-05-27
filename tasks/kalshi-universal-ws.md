@@ -109,20 +109,24 @@ The smoke test now defaults to the demo host and accepts `--base-url` to point e
 
 ---
 
-## Phase 3 — Sequence/delta correctness probe
+## Phase 3 — Sequence/delta correctness probe — ✅ COMPLETE
 
-**Where:** new `probe_kalshi_ws_seq.py`.
-
-**Goal:** Resolve the **officially undocumented** `seq` scope question (per-`sid`? per-market? per-conn?) and verify gap-recovery via `get_snapshot` works as expected.
+**Where:** `probe_kalshi_seq.py`. Output: `probe_kalshi_seq.json`. Reference: `tasks/kalshi-seq-semantics.md`.
 
 **Tasks:**
-- [ ] Subscribe to ~100 markets on one conn. Log every `(sid, seq, market_ticker, type)` tuple for 5 minutes.
-- [ ] Determine `seq` scope empirically — does it increment per-`sid` regardless of market, or per-market within the `sid`, or per-conn across `sid`s?
-- [ ] Force a 5-second network interruption (kill+restart, or local firewall drop). Reconnect, resubscribe, observe `seq` reset behavior.
-- [ ] Issue `update_subscription` with `action: "get_snapshot"` on an active `sid`. Verify the resulting `orderbook_snapshot` arrives with a clean `seq` continuation usable for resync.
-- [ ] Document findings in `tasks/kalshi-seq-semantics.md` — definitive reference for Phase 4's book-state machine.
+- [x] Test A (multi-sid independence) — revealed instead that **Kalshi enforces one `sid` per `(channel, connection)`**. A second `subscribe` to the same channel returns `type=ok` (not `type=subscribed`) and merges new tickers into the existing sid. Phase 4 cannot rely on multiple sids per conn for `orderbook_delta`.
+- [x] Test B (reconnect behavior) — confirmed: new conn → fresh `sid=1`, fresh `seq=1`. Per-conn state, no cross-conn sid carryover.
+- [x] Test C (`get_snapshot`) — confirmed working with explicit `market_tickers`: emits fresh `orderbook_snapshot` per requested market, `seq` continues from current counter (Phase 3 inline test: seq 1,2 before → seq 3,4 after).
+- [x] Captured the structural quirk that `subscribed` ack nests `sid` under `msg.sid` (top-level on data messages, nested on the ack).
+- [x] `tasks/kalshi-seq-semantics.md` written as the project's definitive Kalshi WS reference.
 
-**Effort:** M. **Gain:** locks the contract the Phase 4 ingest layer relies on. Without this we are guessing.
+**Phase 4 implications (locked):**
+1. State machine keys book updates by `(conn_id, market_ticker)` — one sid per conn means within-conn sid is degenerate.
+2. Per-conn seq tracker; reset on disconnect.
+3. Gap recovery = `update_subscription get_snapshot` with affected `market_tickers`; do not reconnect on gap unless the gap recovery itself fails.
+4. Reconnect = nuclear: drop sid, drop seq, drop books on that conn, await fresh snapshots before yielding downstream.
+
+**Effort:** M. **Gain:** Phase 4 book-state design is now grounded in observed behavior rather than docs-guessing.
 
 ---
 

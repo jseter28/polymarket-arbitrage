@@ -1,0 +1,115 @@
+{
+  "tested_at": "2026-05-27T02:39:22+00:00",
+  "host": "wss://demo-api.kalshi.co/trade-api/ws/v2",
+  "hold_seconds": 20.0,
+  "tickers_pool": [
+    "KXMLBEXTRAS-26MAY292210AZSEA-EXTRAS",
+    "KXMLBGAME-26MAY292210AZSEA-SEA",
+    "KXMLBGAME-26MAY292210AZSEA-AZ",
+    "KXMLBEXTRAS-26MAY292215PHILAD-EXTRAS",
+    "KXMLBGAME-26MAY292215PHILAD-PHI",
+    "KXMLBGAME-26MAY292215PHILAD-LAD",
+    "KXMLBRFI-26MAY292140NYYATH",
+    "KXMVECROSSCATEGORY-S202679132ED4009-72769FADB95",
+    "KXMLBEXTRAS-26MAY292140NYYATH-EXTRAS",
+    "KXMLBGAME-26MAY292140NYYATH-NYY",
+    "KXMLBGAME-26MAY292140NYYATH-ATH",
+    "KXMLBTOTAL-26MAY261840LAADET-17",
+    "KXMLBTOTAL-26MAY261840LAADET-16",
+    "KXMLBTOTAL-26MAY261840LAADET-15",
+    "KXMLBSPREAD-26MAY261845ATLBOS-ATL5",
+    "KXMLBSPREAD-26MAY261907MIATOR-TOR9",
+    "KXMLBSPREAD-26MAY261907MIATOR-TOR8",
+    "KXMLBSPREAD-26MAY261907MIATOR-TOR7",
+    "KXMLBSPREAD-26MAY261907MIATOR-TOR6",
+    "KXMLBSPREAD-26MAY261910CINNYM-CIN8"
+  ],
+  "test_a": {
+    "tickers_set_a": [
+      "KXMLBEXTRAS-26MAY292210AZSEA-EXTRAS",
+      "KXMLBGAME-26MAY292210AZSEA-SEA",
+      "KXMLBGAME-26MAY292210AZSEA-AZ",
+      "KXMLBEXTRAS-26MAY292215PHILAD-EXTRAS",
+      "KXMLBGAME-26MAY292215PHILAD-PHI"
+    ],
+    "tickers_set_b": [
+      "KXMLBGAME-26MAY292215PHILAD-LAD",
+      "KXMLBRFI-26MAY292140NYYATH",
+      "KXMVECROSSCATEGORY-S202679132ED4009-72769FADB95",
+      "KXMLBEXTRAS-26MAY292140NYYATH-EXTRAS",
+      "KXMLBGAME-26MAY292140NYYATH-NYY"
+    ],
+    "acks": [
+      {
+        "type": "subscribed",
+        "id": 2,
+        "msg": {
+          "channel": "orderbook_delta",
+          "sid": 1
+        }
+      }
+    ],
+    "sid_a": 1,
+    "sid_b": null,
+    "summary": {
+      "sid_1": {
+        "first": 1,
+        "last": 11,
+        "count": 11,
+        "gaps": []
+      }
+    },
+    "msg_count": 12
+  },
+  "test_b": {
+    "tickers": [
+      "KXMLBEXTRAS-26MAY292210AZSEA-EXTRAS",
+      "KXMLBGAME-26MAY292210AZSEA-SEA",
+      "KXMLBGAME-26MAY292210AZSEA-AZ",
+      "KXMLBEXTRAS-26MAY292215PHILAD-EXTRAS",
+      "KXMLBGAME-26MAY292215PHILAD-PHI",
+      "KXMLBGAME-26MAY292215PHILAD-LAD",
+      "KXMLBRFI-26MAY292140NYYATH",
+      "KXMVECROSSCATEGORY-S202679132ED4009-72769FADB95",
+      "KXMLBEXTRAS-26MAY292140NYYATH-EXTRAS",
+      "KXMLBGAME-26MAY292140NYYATH-NYY"
+    ],
+    "first_conn": {
+      "sid": 1,
+      "last_seq": 10,
+      "msg_count": 11
+    },
+    "second_conn": {
+      "sid": 1,
+      "first_seq": 1,
+      "msg_count": 11
+    },
+    "sid_changed": false,
+    "seq_restarted": true
+  },
+  "test_c": {
+    "tickers": [
+      "KXMLBEXTRAS-26MAY292210AZSEA-EXTRAS",
+      "KXMLBGAME-26MAY292210AZSEA-SEA",
+      "KXMLBGAME-26MAY292210AZSEA-AZ",
+      "KXMLBEXTRAS-26MAY292215PHILAD-EXTRAS",
+      "KXMLBGAME-26MAY292215PHILAD-PHI",
+      "KXMLBGAME-26MAY292215PHILAD-LAD",
+      "KXMLBRFI-26MAY292140NYYATH",
+      "KXMVECROSSCATEGORY-S202679132ED4009-72769FADB95",
+      "KXMLBEXTRAS-26MAY292140NYYATH-EXTRAS",
+      "KXMLBGAME-26MAY292140NYYATH-NYY"
+    ],
+    "sid": 1,
+    "before": {
+      "last_seq": 10,
+      "msg_count": 11
+    },
+    "after": {
+      "first_seq": 11,
+      "msg_count": 1,
+      "new_snapshot_count": 0
+    },
+    "seq_continues": true
+  }
+}
