@@ -130,7 +130,7 @@ The smoke test now defaults to the demo host and accepts `--base-url` to point e
 
 ---
 
-## Phase 4 — `KalshiUniversalWS` ingest module
+## Phase 4 — `KalshiUniversalWS` ingest module — ✅ COMPLETE
 
 **Where:** new `kalshi_client/universal_ws.py`, modeled on `polymarket_client/universal_ws.py`.
 
@@ -154,16 +154,31 @@ await ws.stop()
 - Encode quirks: handle absent `yes_dollars_fp` / `no_dollars_fp` keys, never use `id: 0`, set `use_yes_price=true` on subscribe.
 
 **Tasks:**
-- [ ] Skeleton `KalshiUniversalWS` class with same dataclass + state shape as Polymarket version.
-- [ ] `_conn_supervisor`: handshake, subscribe, recv loop, reconnect with exp backoff (max 60s).
-- [ ] `_apply_snapshot` + `_apply_delta` (handles `side`, `price_dollars`, `delta_fp`).
-- [ ] `_seq_tracker` per `sid` (data structure determined by Phase 3 findings).
-- [ ] `_resync_subscription(sid)` — issues `update_subscription` `get_snapshot`, drains stale until snapshot arrives.
-- [ ] `iter_updates()` async generator using a bounded queue (mirror Polymarket's pattern — apply lessons from `tasks/todo.md` Problem #1: latest-wins coalesce per-market, separate apply task from recv).
-- [ ] Status struct with per-conn telemetry surface.
-- [ ] Unit tests: snapshot apply, delta apply, gap detection, resync trigger, missing-side-key tolerance, reconnect-with-stale-flush.
+- [x] Skeleton `KalshiUniversalWS` class with `KalshiConnState` dataclass mirroring Polymarket's `ShardState`.
+- [x] `_conn_supervisor` + `_run_conn_session`: handshake via `build_headers`, initial subscribe (batched at 500 if huge), recv loop, reconnect with exp backoff (cap 30s) and 3-short-session quarantine (60s).
+- [x] `_apply_snapshot` + `_apply_delta` handling `yes_dollars_fp` / `no_dollars_fp` (omit-when-empty quirk), slot-replace immutability contract.
+- [x] `_track_seq` — per-conn seq tracker (one sid per conn per Phase 3 finding).
+- [x] `_resync_conn` — `update_subscription get_snapshot` for all tickers on the conn; seq continues per Phase 3.
+- [x] `iter_updates()` — bounded queue, drop-oldest, latest-wins coalesce at yield time via `KalshiOrderBook.to_unified_orderbook()`.
+- [x] `status()` — field names match `PolymarketUniversalWS` for drop-in dashboard compat; adds Kalshi-specific keys (`sid`, `last_seq`, `snapshot_count`, `delta_count`, `seq_gap_count`, `snapshot_resync_count`).
+- [x] 32 unit tests in `tests/test_kalshi_universal_ws.py` covering partition, apply paths, seq tracking, message routing, queue, status, backoff.
+- [x] `kalshi_client/__init__.py` exports `KalshiUniversalWS`.
 
-**Effort:** L. **Gain:** the workstream's core deliverable.
+**Result of live verification:**
+1. *Smoke (3 tickers, 2 conns, 15s):* both conns connected, sid=1 each, 3 snapshots received, 0 seq gaps, 0 drops.
+2. *Mini soak (full demo universe, 3 conns, ~90s):*
+   - **67,946 markets tracked** across 3 sharded conns (~22.5k each).
+   - All 3 conns connected, all sid=1 (one-sid-per-conn confirmed).
+   - Initial subscribe + snapshot flood completed in ~30s.
+   - Steady-state: ~143k total messages observed; one hot market drove conn#0 to 69k deltas alone.
+   - **0 drops, queue_depth stayed at 0** (consumer kept up).
+   - **88 seq gaps total (~0.06% rate)** under load — well below the 1% degradation threshold; `_resync_conn` exercised automatically each time.
+
+**Lines:** `kalshi_client/universal_ws.py` ≈ 540 lines (vs. plan budget 500–600). Tests ≈ 470 lines.
+
+**Atomic commits:** Phase 4a `17f3a3f` (skeleton + data path), Phase 4b `20ec9ad` (supervisor + seq + gap recovery), Phase 4c (this) — `__init__` export + plan update.
+
+**Effort:** L. **Gain:** the workstream's core deliverable is live. Phases 5–7 layer additional behavior on top.
 
 ---
 
