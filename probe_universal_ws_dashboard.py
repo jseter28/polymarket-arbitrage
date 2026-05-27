@@ -30,6 +30,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from polymarket_client.universal_ws import PolymarketUniversalWS
 
+# Kalshi import is lazy / optional — wiring is only active when --kalshi is set.
+try:
+    from kalshi_client.universal_ws import KalshiUniversalWS  # noqa: F401
+except Exception:  # pragma: no cover — import guard for installs without crypto deps
+    KalshiUniversalWS = None  # type: ignore[assignment]
+
 logger = logging.getLogger("probe_ws_dashboard")
 
 
@@ -43,22 +49,38 @@ def utcnow_iso() -> str:
 
 
 class HistoryRecorder:
-    """Polls ws.status() at fixed period; builds rolling history + event log."""
+    """Polls each source's status() at fixed period; builds rolling history + event log.
+
+    Multi-source aware. Pass a single `ws` (legacy positional) and it acts as
+    a single-venue recorder for Polymarket. Pass `sources={'polymarket': ws_pm,
+    'kalshi': ws_ks}` for dual-venue operation. Snapshots and history then
+    carry per-venue blocks plus an aggregate roll-up that sums across venues.
+    """
 
     def __init__(
         self,
-        ws: PolymarketUniversalWS,
+        ws: Optional[PolymarketUniversalWS] = None,
         period_s: float = 2.0,
         max_samples: int = 43200,  # 24h at 2s sampling
         max_events: int = 10000,
+        sources: Optional[dict] = None,
     ):
-        self.ws = ws
+        if sources is None and ws is None:
+            raise ValueError("HistoryRecorder needs either ws= or sources=")
+        if sources is None:
+            sources = {"polymarket": ws}
+        self.sources: dict = sources
+        # Back-compat handle: tools that reach for .ws still get the Polymarket
+        # instance (or the only source if no Polymarket).
+        self.ws = sources.get("polymarket") or next(iter(sources.values()))
         self.period_s = period_s
         self.samples: deque[dict] = deque(maxlen=max_samples)
         self.events: deque[dict] = deque(maxlen=max_events)
-        self._last_shard_states: dict[int, dict] = {}
-        self._last_msg_total: int = 0
-        self._last_drops: int = 0
+        # Per-venue per-shard last-state cache; key is (venue, shard_id).
+        self._last_shard_states: dict[tuple[str, int], dict] = {}
+        # Per-venue cumulative counters for rate deltas.
+        self._last_msg_total: dict[str, int] = {v: 0 for v in sources}
+        self._last_drops: dict[str, int] = {v: 0 for v in sources}
         self._start_mono: float = 0.0
         self._task: Optional[asyncio.Task] = None
         self._stop = asyncio.Event()
@@ -96,104 +118,199 @@ class HistoryRecorder:
             raise
 
     def _take_sample(self) -> None:
-        status = self.ws.status()
         now_mono = time.monotonic()
         elapsed = now_mono - self._start_mono
 
-        shards = status["shards"]
-        msg_total = sum(s["message_count"] for s in shards)
-        sess_total = sum(s["session_count"] for s in shards)
-        alive = sum(1 for s in shards if s["state"] == "connected")
-        quarantined = sum(1 for s in shards if s["state"] == "quarantined")
-        first_msg = sum(1 for s in shards if s["first_msg_received"])
+        # Per-venue measurements, summed into aggregate.
+        agg_msgs_per_sec = 0.0
+        agg_drops_per_sec = 0.0
+        agg_queue_depth = 0
+        agg_total_messages = 0
+        agg_total_drops = 0
+        agg_total_sessions = 0
+        agg_alive = 0
+        agg_quarantined = 0
+        agg_first_msg = 0
+        per_venue: dict[str, dict] = {}
 
-        msgs_delta = msg_total - self._last_msg_total
-        drops_delta = status["drops"] - self._last_drops
-        msgs_per_sec = max(0.0, msgs_delta / self.period_s)
-        drops_per_sec = max(0.0, drops_delta / self.period_s)
+        for venue, ws in self.sources.items():
+            try:
+                status = ws.status()
+            except Exception as e:
+                logger.warning(f"recorder: {venue}.status() failed: {e}")
+                continue
+            shards = status["shards"]
+            msg_total = sum(s.get("message_count", 0) for s in shards)
+            sess_total = sum(s.get("session_count", 0) for s in shards)
+            alive = sum(1 for s in shards if s.get("state") == "connected")
+            quarantined = sum(1 for s in shards if s.get("state") == "quarantined")
+            first_msg = sum(1 for s in shards if s.get("first_msg_received"))
 
-        self.samples.append({
-            "t": round(elapsed, 1),
-            "msgs_per_sec": round(msgs_per_sec, 1),
-            "drops_per_sec": round(drops_per_sec, 1),
-            "queue_depth": status["queue_depth"],
-            "alive_shards": alive,
-            "quarantined_shards": quarantined,
-            "first_msg_shards": first_msg,
-            "total_messages": msg_total,
-            "total_drops": status["drops"],
-            "total_sessions": sess_total,
-        })
-        self._last_msg_total = msg_total
-        self._last_drops = status["drops"]
+            prev_msgs = self._last_msg_total.get(venue, 0)
+            prev_drops = self._last_drops.get(venue, 0)
+            msgs_delta = msg_total - prev_msgs
+            drops_delta = status.get("drops", 0) - prev_drops
+            msgs_per_sec = max(0.0, msgs_delta / self.period_s)
+            drops_per_sec = max(0.0, drops_delta / self.period_s)
 
-        for s in shards:
-            sid = s["shard_id"]
-            prev = self._last_shard_states.get(sid)
-            cur_state = s["state"]
-            cur_sessions = s["session_count"]
-            reason = s["last_disconnect_reason"] or s["last_open_failure"]
-            if prev is None:
-                self.events.append({
-                    "t": round(elapsed, 1),
-                    "wall_utc": utcnow_iso(),
-                    "shard_id": sid,
-                    "kind": "init",
-                    "state": cur_state,
-                })
-            else:
-                if prev["state"] != cur_state:
-                    self.events.append({
-                        "t": round(elapsed, 1),
-                        "wall_utc": utcnow_iso(),
-                        "shard_id": sid,
-                        "kind": "state_change",
-                        "from_state": prev["state"],
-                        "to_state": cur_state,
-                        "reason": reason,
-                    })
-                if cur_sessions > prev.get("session_count", 0):
-                    self.events.append({
-                        "t": round(elapsed, 1),
-                        "wall_utc": utcnow_iso(),
-                        "shard_id": sid,
-                        "kind": "session_started",
-                        "session_count": cur_sessions,
-                        "reason": reason,
-                    })
-            self._last_shard_states[sid] = {
-                "state": cur_state,
-                "session_count": cur_sessions,
+            per_venue[venue] = {
+                "msgs_per_sec": round(msgs_per_sec, 1),
+                "drops_per_sec": round(drops_per_sec, 1),
+                "queue_depth": status.get("queue_depth", 0),
+                "alive_shards": alive,
+                "quarantined_shards": quarantined,
+                "first_msg_shards": first_msg,
+                "total_messages": msg_total,
+                "total_drops": status.get("drops", 0),
+                "total_sessions": sess_total,
             }
+            agg_msgs_per_sec += msgs_per_sec
+            agg_drops_per_sec += drops_per_sec
+            agg_queue_depth += status.get("queue_depth", 0)
+            agg_total_messages += msg_total
+            agg_total_drops += status.get("drops", 0)
+            agg_total_sessions += sess_total
+            agg_alive += alive
+            agg_quarantined += quarantined
+            agg_first_msg += first_msg
+
+            self._last_msg_total[venue] = msg_total
+            self._last_drops[venue] = status.get("drops", 0)
+
+            for s in shards:
+                sid = s.get("shard_id", s.get("conn_id"))
+                key = (venue, sid)
+                prev = self._last_shard_states.get(key)
+                cur_state = s.get("state")
+                cur_sessions = s.get("session_count", 0)
+                reason = s.get("last_disconnect_reason") or s.get("last_open_failure")
+                if prev is None:
+                    self.events.append(
+                        {
+                            "t": round(elapsed, 1),
+                            "wall_utc": utcnow_iso(),
+                            "venue": venue,
+                            "shard_id": sid,
+                            "kind": "init",
+                            "state": cur_state,
+                        }
+                    )
+                else:
+                    if prev["state"] != cur_state:
+                        self.events.append(
+                            {
+                                "t": round(elapsed, 1),
+                                "wall_utc": utcnow_iso(),
+                                "venue": venue,
+                                "shard_id": sid,
+                                "kind": "state_change",
+                                "from_state": prev["state"],
+                                "to_state": cur_state,
+                                "reason": reason,
+                            }
+                        )
+                    if cur_sessions > prev.get("session_count", 0):
+                        self.events.append(
+                            {
+                                "t": round(elapsed, 1),
+                                "wall_utc": utcnow_iso(),
+                                "venue": venue,
+                                "shard_id": sid,
+                                "kind": "session_started",
+                                "session_count": cur_sessions,
+                                "reason": reason,
+                            }
+                        )
+                self._last_shard_states[key] = {
+                    "state": cur_state,
+                    "session_count": cur_sessions,
+                }
+
+        # Aggregate sample row (sums across venues; matches legacy single-venue shape).
+        self.samples.append(
+            {
+                "t": round(elapsed, 1),
+                "msgs_per_sec": round(agg_msgs_per_sec, 1),
+                "drops_per_sec": round(agg_drops_per_sec, 1),
+                "queue_depth": agg_queue_depth,
+                "alive_shards": agg_alive,
+                "quarantined_shards": agg_quarantined,
+                "first_msg_shards": agg_first_msg,
+                "total_messages": agg_total_messages,
+                "total_drops": agg_total_drops,
+                "total_sessions": agg_total_sessions,
+                "venues": per_venue,
+            }
+        )
 
     def snapshot(self) -> dict:
-        status = self.ws.status()
+        """Combined snapshot. Single-venue runs preserve the legacy schema
+        (top-level shards array + aggregate). Multi-venue runs add a
+        `venues` block with per-venue aggregate + shards; the top-level
+        aggregate is then the sum across venues."""
         elapsed = time.monotonic() - self._start_mono if self._start_mono else 0
         msg_1min, msg_10min = self._compute_recent_rates()
-        shards = status["shards"]
-        return {
-            "probe": {
-                **self.probe_meta,
-                "elapsed_s": round(elapsed, 1),
-                "wall_utc": utcnow_iso(),
-            },
-            "aggregate": {
+
+        venues_block: dict[str, dict] = {}
+        agg = {
+            "shard_count": 0,
+            "market_count": 0,
+            "token_count": 0,
+            "queue_depth": 0,
+            "queue_maxsize": 0,
+            "drops": 0,
+            "total_messages": 0,
+            "total_sessions": 0,
+            "alive_shards": 0,
+            "quarantined_shards": 0,
+            "first_msg_shards": 0,
+        }
+        all_shards: list[dict] = []
+        for venue, ws in self.sources.items():
+            status = ws.status()
+            shards = status["shards"]
+            venue_agg = {
                 "shard_count": status["shard_count"],
                 "market_count": status["market_count"],
                 "token_count": status["token_count"],
                 "queue_depth": status["queue_depth"],
                 "queue_maxsize": status["queue_maxsize"],
                 "drops": status["drops"],
-                "total_messages": sum(s["message_count"] for s in shards),
-                "total_sessions": sum(s["session_count"] for s in shards),
-                "alive_shards": sum(1 for s in shards if s["state"] == "connected"),
-                "quarantined_shards": sum(1 for s in shards if s["state"] == "quarantined"),
-                "first_msg_shards": sum(1 for s in shards if s["first_msg_received"]),
+                "total_messages": sum(s.get("message_count", 0) for s in shards),
+                "total_sessions": sum(s.get("session_count", 0) for s in shards),
+                "alive_shards": sum(1 for s in shards if s.get("state") == "connected"),
+                "quarantined_shards": sum(
+                    1 for s in shards if s.get("state") == "quarantined"
+                ),
+                "first_msg_shards": sum(
+                    1 for s in shards if s.get("first_msg_received")
+                ),
+            }
+            venues_block[venue] = {"aggregate": venue_agg, "shards": shards}
+            for k in agg:
+                agg[k] += venue_agg[k]
+            # Tag each shard dict with its venue for the table view.
+            for s in shards:
+                s = dict(s)
+                s["venue"] = venue
+                all_shards.append(s)
+
+        out: dict = {
+            "probe": {
+                **self.probe_meta,
+                "elapsed_s": round(elapsed, 1),
+                "wall_utc": utcnow_iso(),
+            },
+            "aggregate": {
+                **agg,
                 "msg_per_sec_1min": msg_1min,
                 "msg_per_sec_10min": msg_10min,
             },
-            "shards": shards,
+            "shards": all_shards,
         }
+        if len(self.sources) > 1:
+            out["venues"] = venues_block
+        return out
 
     def _compute_recent_rates(self) -> tuple[float, float]:
         if not self.samples:
@@ -359,6 +476,30 @@ DASHBOARD_HTML = r"""<!doctype html>
   .sidebar li a .count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
   .sidebar li a.active .count { color: var(--accent); }
   .sidebar .empty { padding: 12px 14px; color: var(--muted); font-size: 12px; font-style: italic; }
+  /* Collapsible groups (Programs / Admin) below the topical list. */
+  .sidebar .cat-group { list-style: none; border-top: 1px solid var(--bg3); margin-top: 6px; padding-top: 4px; }
+  .sidebar .cat-group > details > summary {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 14px; color: var(--muted); cursor: pointer; user-select: none;
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.7px; font-weight: 500;
+  }
+  .sidebar .cat-group > details > summary:hover { color: var(--fg); }
+  .sidebar .cat-group > details > summary::-webkit-details-marker { display: none; }
+  .sidebar .cat-group > details > summary::marker { content: ''; }
+  .sidebar .cat-group > details > summary::before { content: '\\25B8'; display: inline-block; margin-right: 6px; transition: transform 0.1s; }
+  .sidebar .cat-group > details[open] > summary::before { content: '\\25BE'; }
+  .sidebar .cat-group > details > summary .count { color: var(--muted); font-size: 10px; }
+
+  /* Dual-venue: PM / KS badge inline next to category labels and market rows.
+     Two colors so a glance distinguishes Polymarket from Kalshi without the
+     prefixed slug having to leak into the visible label. */
+  .venue-badge {
+    display: inline-block; padding: 0 4px; margin-right: 4px;
+    border-radius: 3px; font-size: 9px; font-weight: 600;
+    letter-spacing: 0.5px; vertical-align: middle;
+  }
+  .venue-badge.venue-polymarket { background: #1e3a8a; color: #93c5fd; }
+  .venue-badge.venue-kalshi { background: #134e4a; color: #5eead4; }
 
   .grid-wrap { min-width: 0; }
   .grid-header {
@@ -787,14 +928,43 @@ function renderCategories() {
     ul.innerHTML = '<li class="empty">no categories yet</li>';
     return;
   }
-  ul.innerHTML = categoriesCache.map(c => {
+  // Server returns entries pre-sorted by (class, msg_rate_sum desc, label).
+  // Split into Topics (default expanded), Programs, Admin (both collapsed).
+  const groups = { topic: [], programs: [], admin: [] };
+  for (const c of categoriesCache) {
+    const cls = (c.class && groups[c.class]) ? c.class : 'topic';
+    groups[cls].push(c);
+  }
+  const renderItem = c => {
     const active = (currentCat === c.slug) ? ' active' : '';
     const slug = encodeURIComponent(c.slug);
+    // Venue-prefixed slugs (pm:foo / ks:bar) come from the dual-venue backend.
+    // Strip the prefix from the display label and show a colored badge instead.
+    const venue = c.venue || (c.slug.startsWith('ks:') ? 'kalshi' :
+                              c.slug.startsWith('pm:') ? 'polymarket' : '');
+    const displayLabel = (c.label || c.slug).replace(/^(pm:|ks:)/, '');
+    const badge = venue
+      ? `<span class="venue-badge venue-${venue}">${venue === 'kalshi' ? 'KS' : 'PM'}</span> `
+      : '';
     return `<li><a href="#cat/${slug}" class="${active.trim()}" data-slug="${c.slug}">
-              <span>${escapeHtml(c.label)}</span>
+              ${badge}<span>${escapeHtml(displayLabel)}</span>
               <span class="count">${c.count}</span>
             </a></li>`;
-  }).join('');
+  };
+  const renderGroup = (label, items) => {
+    if (items.length === 0) return '';
+    // Keep group open if the currently-selected category lives inside it.
+    const containsActive = items.some(c => c.slug === currentCat);
+    const openAttr = containsActive ? ' open' : '';
+    return `<li class="cat-group"><details${openAttr}>
+              <summary>${label} <span class="count">${items.length}</span></summary>
+              <ul>${items.map(renderItem).join('')}</ul>
+            </details></li>`;
+  };
+  ul.innerHTML =
+    groups.topic.map(renderItem).join('')
+    + renderGroup('Programs', groups.programs)
+    + renderGroup('Admin', groups.admin);
 }
 
 function pickCategory(slug, pushHash) {
@@ -849,7 +1019,9 @@ function renderMarkets(rows, total) {
     return;
   }
   tbody.innerHTML = rows.map(r => {
-    const stale = (r.last_msg_age_s != null && r.last_msg_age_s > 60) ? ' stale' : '';
+    const isStale = (r.last_msg_age_s != null && r.last_msg_age_s > 60);
+    const hasBook = (r.yes_bid != null || r.yes_ask != null || r.no_bid != null || r.no_ask != null);
+    const stale = isStale ? ' stale' : '';
     const yes = fmtPx(r.yes_bid, r.yes_ask);
     const no  = fmtPx(r.no_bid, r.no_ask);
     const spread = r.spread != null ? r.spread.toFixed(3) : '<span class="nobook">—</span>';
@@ -858,7 +1030,13 @@ function renderMarkets(rows, total) {
       ? r.msg_rate_1min.toFixed(1)
       : '<span class="nobook">—</span>';
     const age = r.last_msg_age_s == null ? '<span class="nobook">—</span>' : fmtAge(r.last_msg_age_s);
-    return `<tr class="clickable${stale}" data-market-id="${escapeAttr(r.market_id)}">
+    const reasons = [];
+    if (isStale) reasons.push(`stale ${fmtAge(r.last_msg_age_s)} — no WS update >60s (shard likely reconnecting)`);
+    if (!hasBook) reasons.push(r.last_msg_age_s == null
+      ? 'no order book yet — no snapshot received for either YES/NO token'
+      : 'no order book — both sides empty in last snapshot');
+    const rowTitle = reasons.length ? ` title="${escapeAttr(reasons.join(' · '))}"` : '';
+    return `<tr class="clickable${stale}" data-market-id="${escapeAttr(r.market_id)}"${rowTitle}>
       <td class="q" title="${escapeAttr(r.question)}">${escapeHtml(r.question)}</td>
       <td class="num">${yes}</td>
       <td class="num">${no}</td>
@@ -1345,8 +1523,30 @@ window.addEventListener('load', () => {
 # ---------------------------------------------------------------------------
 
 
-def create_app(recorder: HistoryRecorder, ws: PolymarketUniversalWS) -> FastAPI:
+def create_app(
+    recorder: HistoryRecorder, sources: Optional[dict] = None, ws=None
+) -> FastAPI:
+    """
+    `sources` is the dual-venue dict mapping venue → WS instance. For
+    single-venue compat, accept a positional `ws` and wrap it.
+    """
+    if sources is None:
+        if ws is None:
+            sources = recorder.sources
+        else:
+            sources = {"polymarket": ws}
+
     app = FastAPI(title="Universal WS Soak Dashboard")
+
+    def _resolve_venue(market_id: str) -> tuple[Optional[str], Optional[object]]:
+        """Look up the venue for a market_id by prefix and return its WS."""
+        for venue, src in sources.items():
+            if venue == "kalshi" and market_id.startswith("kalshi:"):
+                return venue, src
+            if venue == "polymarket" and not market_id.startswith("kalshi:"):
+                return venue, src
+        # Fallback: try each source's market_detail.
+        return None, None
 
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -1367,26 +1567,80 @@ def create_app(recorder: HistoryRecorder, ws: PolymarketUniversalWS) -> FastAPI:
 
     @app.get("/api/categories")
     async def categories():
-        return JSONResponse({"categories": ws.categories()})
+        # Concatenate categories from every source; tag each with its venue.
+        # Slug prefixed with the venue ('pm:' / 'ks:') so hash routes stay
+        # uniquely addressable across venues.
+        out: list[dict] = []
+        for venue, src in sources.items():
+            try:
+                cats = src.categories()
+            except Exception as e:
+                logger.warning(f"{venue}.categories() failed: {e}")
+                continue
+            short = "ks" if venue == "kalshi" else "pm"
+            for c in cats:
+                row = dict(c)
+                row["venue"] = venue
+                row["slug"] = f"{short}:{c['slug']}"
+                out.append(row)
+        out.sort(key=lambda c: (-c.get("count", 0), c["slug"]))
+        return JSONResponse({"categories": out})
 
     @app.get("/api/markets")
-    async def markets(tag: str, sort: str = "volume", limit: int = 100):
-        # Clamp limit to a sensible ceiling so a hostile/typoed query can't
-        # try to materialize the entire universe in one response.
+    async def markets(
+        tag: str, sort: str = "volume", limit: int = 100, venue: Optional[str] = None
+    ):
         limit = max(1, min(int(limit), 500))
-        rows = ws.markets_by_tag(tag_slug=tag, sort=sort, limit=limit)
-        return JSONResponse({"tag": tag, "sort": sort, "count": len(rows), "markets": rows})
+        # Strip 'pm:' / 'ks:' prefix to recover the upstream slug, and route
+        # to the right venue's WS.
+        target_venue = venue
+        slug = tag
+        if tag.startswith("pm:"):
+            target_venue, slug = "polymarket", tag[3:]
+        elif tag.startswith("ks:"):
+            target_venue, slug = "kalshi", tag[3:]
+        rows: list[dict] = []
+        for v, src in sources.items():
+            if target_venue and v != target_venue:
+                continue
+            try:
+                vrows = src.markets_by_tag(tag_slug=slug, sort=sort, limit=limit)
+            except Exception as e:
+                logger.warning(f"{v}.markets_by_tag failed: {e}")
+                continue
+            for r in vrows:
+                r = dict(r)
+                r["venue"] = v
+                rows.append(r)
+        rows = rows[:limit]
+        return JSONResponse(
+            {"tag": tag, "sort": sort, "count": len(rows), "markets": rows}
+        )
 
     @app.get("/api/markets/{market_id}")
     async def market_detail(market_id: str):
-        detail = ws.market_detail(market_id)
-        if detail is None:
-            return JSONResponse({"error": "unknown market_id"}, status_code=404)
-        return JSONResponse(detail)
+        venue, src = _resolve_venue(market_id)
+        if src is not None:
+            detail = src.market_detail(market_id)
+            if detail is not None:
+                detail = dict(detail)
+                detail["venue"] = venue
+                return JSONResponse(detail)
+        # Fallback: try every source.
+        for v, s in sources.items():
+            try:
+                d = s.market_detail(market_id)
+            except Exception:
+                d = None
+            if d is not None:
+                d = dict(d)
+                d["venue"] = v
+                return JSONResponse(d)
+        return JSONResponse({"error": "unknown market_id"}, status_code=404)
 
     @app.websocket("/ws")
     async def ws_endpoint(conn: WebSocket):
-        await _handle_ws_connection(conn, ws)
+        await _handle_ws_connection(conn, sources)
 
     return app
 
@@ -1402,19 +1656,35 @@ WS_PONG_TIMEOUT_S = 90.0
 WS_WATCHDOG_PERIOD_S = 10.0
 
 
-async def _handle_ws_connection(conn: WebSocket, ws: PolymarketUniversalWS) -> None:
+async def _handle_ws_connection(conn: WebSocket, sources) -> None:
     """
     One browser-tab WebSocket lifetime. Multiplexes subscribe/unsubscribe/ping
     over a single connection; pushes snapshot then live frames per market_id.
 
+    `sources` is either the dual-venue dict (venue → WS) or a single WS for
+    backward compat. Each subscribed market_id is dispatched to the right
+    venue's WS based on prefix ('kalshi:' → Kalshi, else Polymarket).
+
     Cleanup invariant: every market subscribed during this connection is
     unsubscribed before the function returns, even on crash/disconnect.
     """
+    if not isinstance(sources, dict):
+        sources = {"polymarket": sources}
+
     await conn.accept()
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=WS_QUEUE_MAXSIZE)
-    subscriptions: set[str] = set()
+    # subscriptions maps market_id → owning ws instance (for unsubscribe routing).
+    subscriptions: dict[str, object] = {}
     last_client_msg_at = time.monotonic()
+
+    def _route(mid: str):
+        """Return the WS instance that owns this market_id, or None."""
+        if mid.startswith("kalshi:") and "kalshi" in sources:
+            return sources["kalshi"]
+        if not mid.startswith("kalshi:") and "polymarket" in sources:
+            return sources["polymarket"]
+        return None
 
     async def receiver() -> None:
         nonlocal last_client_msg_at
@@ -1435,28 +1705,41 @@ async def _handle_ws_connection(conn: WebSocket, ws: PolymarketUniversalWS) -> N
                 mid = str(msg.get("market_id") or "")
                 if not mid or mid in subscriptions:
                     continue
+                target = _route(mid)
+                if target is None:
+                    await conn.send_text(
+                        json.dumps({"type": "error", "message": f"no venue for: {mid}"})
+                    )
+                    continue
                 # Register the queue BEFORE taking the snapshot so any frames
                 # that arrive mid-snapshot are queued, not dropped on the floor.
-                await ws.subscribe_market(mid, queue)
-                subscriptions.add(mid)
-                detail = ws.market_detail(mid)
+                _r = target.subscribe_market(mid, queue)
+                if asyncio.iscoroutine(_r):
+                    await _r
+                subscriptions[mid] = target
+                detail = target.market_detail(mid)
                 if detail is None:
-                    # Race: market id unknown. Roll back the subscribe.
-                    await ws.unsubscribe_market(mid, queue)
-                    subscriptions.discard(mid)
-                    await conn.send_text(json.dumps({
-                        "type": "error", "message": f"unknown market_id: {mid}",
-                    }))
+                    _r = target.unsubscribe_market(mid, queue)
+                    if asyncio.iscoroutine(_r):
+                        await _r
+                    subscriptions.pop(mid, None)
+                    await conn.send_text(
+                        json.dumps(
+                            {"type": "error", "message": f"unknown market_id: {mid}"}
+                        )
+                    )
                     continue
-                await conn.send_text(json.dumps({
-                    "type": "snapshot", "market_id": mid, "data": detail,
-                }))
+                await conn.send_text(
+                    json.dumps({"type": "snapshot", "market_id": mid, "data": detail})
+                )
                 continue
             if op == "unsubscribe":
                 mid = str(msg.get("market_id") or "")
-                if mid and mid in subscriptions:
-                    await ws.unsubscribe_market(mid, queue)
-                    subscriptions.discard(mid)
+                target = subscriptions.pop(mid, None)
+                if target is not None:
+                    _r = target.unsubscribe_market(mid, queue)
+                    if asyncio.iscoroutine(_r):
+                        await _r
                 continue
             # Unknown op → ignore silently (forward-compat).
 
@@ -1497,9 +1780,11 @@ async def _handle_ws_connection(conn: WebSocket, ws: PolymarketUniversalWS) -> N
                 await t
             except (asyncio.CancelledError, WebSocketDisconnect, Exception):
                 pass
-        for mid in list(subscriptions):
+        for mid, target in list(subscriptions.items()):
             try:
-                await ws.unsubscribe_market(mid, queue)
+                _r = target.unsubscribe_market(mid, queue)
+                if asyncio.iscoroutine(_r):
+                    await _r
             except Exception:
                 pass
         subscriptions.clear()
@@ -1525,16 +1810,43 @@ async def main_async(args) -> None:
         shard_size=args.shard_size,
         max_markets=args.max_markets,
     )
-    recorder = HistoryRecorder(ws, period_s=args.sample_period)
+    sources: dict = {"polymarket": ws}
+
+    ws_kalshi = None
+    if args.kalshi:
+        if KalshiUniversalWS is None:
+            raise RuntimeError(
+                "--kalshi set but KalshiUniversalWS could not be imported"
+            )
+        from utils.config_loader import load_config
+        from kalshi_client.auth import load_private_key
+
+        cfg = load_config(args.kalshi_config)
+        if not cfg.api.kalshi_api_key or not cfg.api.kalshi_private_key:
+            raise RuntimeError(
+                f"--kalshi set but no Kalshi credentials in {args.kalshi_config}"
+            )
+        pk = load_private_key(cfg.api.kalshi_private_key)
+        ws_kalshi = KalshiUniversalWS(
+            api_key_id=cfg.api.kalshi_api_key,
+            private_key=pk,
+            base_ws=args.kalshi_base_ws,
+            conn_count=args.kalshi_conn_count,
+        )
+        sources["kalshi"] = ws_kalshi
+        logger.info(f"Kalshi enabled: base_ws={args.kalshi_base_ws}")
+
+    recorder = HistoryRecorder(sources=sources, period_s=args.sample_period)
     recorder.set_probe_meta(
         start_wall_utc=utcnow_iso(),
         target_duration_s=args.duration,
         shard_size=args.shard_size,
         max_markets=args.max_markets,
+        kalshi=bool(args.kalshi),
         fatal_error=None,
     )
 
-    app = create_app(recorder, ws)
+    app = create_app(recorder, sources=sources)
     config = uvicorn.Config(app, host="0.0.0.0", port=args.port, log_level="warning")
     server = uvicorn.Server(config)
 
@@ -1545,9 +1857,11 @@ async def main_async(args) -> None:
     server_task: Optional[asyncio.Task] = None
     consumer_task: Optional[asyncio.Task] = None
 
-    async def consumer() -> None:
+    consumer_tasks: list[asyncio.Task] = []
+
+    async def consume_source(src) -> None:
         try:
-            async for _mid, _book in ws.iter_updates():
+            async for _mid, _book in src.iter_updates():
                 consumer_counter[0] += 1
                 if stop.is_set():
                     return
@@ -1556,10 +1870,17 @@ async def main_async(args) -> None:
 
     try:
         await ws.start(market_ids=None)
+        if ws_kalshi is not None:
+            await ws_kalshi.start()
         await recorder.start()
         server_task = asyncio.create_task(server.serve(), name="uvicorn")
-        consumer_task = asyncio.create_task(consumer(), name="consumer")
-        logger.info(f"Dashboard live at http://localhost:{args.port}/ — running for {args.duration}s")
+        for src in sources.values():
+            consumer_tasks.append(
+                asyncio.create_task(consume_source(src), name="consumer")
+            )
+        logger.info(
+            f"Dashboard live at http://localhost:{args.port}/ — running for {args.duration}s"
+        )
 
         try:
             await asyncio.wait_for(stop.wait(), timeout=args.duration)
@@ -1573,7 +1894,7 @@ async def main_async(args) -> None:
         stop.set()
         if server is not None:
             server.should_exit = True
-        for t in (consumer_task, server_task):
+        for t in [*consumer_tasks, server_task] if server_task else consumer_tasks:
             if t and not t.done():
                 t.cancel()
                 try:
@@ -1582,10 +1903,59 @@ async def main_async(args) -> None:
                     pass
         await recorder.stop()
         await ws.stop()
+        if ws_kalshi is not None:
+            try:
+                await ws_kalshi.stop()
+            except Exception:
+                pass
 
     elapsed = time.monotonic() - start_mono
-    end_status = ws.status()
-    shards = end_status["shards"]
+    per_venue_summary: dict[str, dict] = {}
+    agg_shard_count = 0
+    agg_market_count = 0
+    agg_token_count = 0
+    agg_total_messages = 0
+    agg_total_bytes = 0
+    agg_total_sessions = 0
+    agg_first_msg_shards = 0
+    agg_quar_shards = 0
+    agg_drops = 0
+    agg_queue_final = 0
+    all_shards: list[dict] = []
+    for venue, src in sources.items():
+        s = src.status()
+        shards = s["shards"]
+        per_venue_summary[venue] = {
+            "shard_count": s["shard_count"],
+            "market_count": s["market_count"],
+            "token_count": s["token_count"],
+            "total_messages": sum(sh.get("message_count", 0) for sh in shards),
+            "total_bytes": sum(sh.get("bytes_received", 0) for sh in shards),
+            "total_sessions": sum(sh.get("session_count", 0) for sh in shards),
+            "first_msg_shards": sum(1 for sh in shards if sh.get("first_msg_received")),
+            "quarantined_shards": sum(
+                1 for sh in shards if sh.get("state") == "quarantined"
+            ),
+            "drops": s["drops"],
+            "queue_depth_final": s["queue_depth"],
+            "queue_maxsize": s["queue_maxsize"],
+            "shards": shards,
+        }
+        agg_shard_count += s["shard_count"]
+        agg_market_count += s["market_count"]
+        agg_token_count += s["token_count"]
+        agg_total_messages += per_venue_summary[venue]["total_messages"]
+        agg_total_bytes += per_venue_summary[venue]["total_bytes"]
+        agg_total_sessions += per_venue_summary[venue]["total_sessions"]
+        agg_first_msg_shards += per_venue_summary[venue]["first_msg_shards"]
+        agg_quar_shards += per_venue_summary[venue]["quarantined_shards"]
+        agg_drops += s["drops"]
+        agg_queue_final += s["queue_depth"]
+        for sh in shards:
+            tagged = dict(sh)
+            tagged["venue"] = venue
+            all_shards.append(tagged)
+
     summary = {
         "probe": {
             "type": "universal_ws_dashboard",
@@ -1595,24 +1965,25 @@ async def main_async(args) -> None:
             "end_wall_utc": utcnow_iso(),
             "shard_size": args.shard_size,
             "max_markets": args.max_markets,
+            "kalshi": bool(args.kalshi),
             "fatal_error": err,
         },
         "aggregate": {
-            "shard_count": end_status["shard_count"],
-            "market_count": end_status["market_count"],
-            "token_count": end_status["token_count"],
-            "total_messages": sum(s["message_count"] for s in shards),
-            "total_bytes": sum(s["bytes_received"] for s in shards),
-            "msg_per_sec": round(sum(s["message_count"] for s in shards) / elapsed, 1) if elapsed else 0,
-            "total_sessions": sum(s["session_count"] for s in shards),
-            "shards_with_first_msg": sum(1 for s in shards if s["first_msg_received"]),
-            "shards_quarantined": sum(1 for s in shards if s["state"] == "quarantined"),
-            "drops": end_status["drops"],
+            "shard_count": agg_shard_count,
+            "market_count": agg_market_count,
+            "token_count": agg_token_count,
+            "total_messages": agg_total_messages,
+            "total_bytes": agg_total_bytes,
+            "msg_per_sec": round(agg_total_messages / elapsed, 1) if elapsed else 0,
+            "total_sessions": agg_total_sessions,
+            "shards_with_first_msg": agg_first_msg_shards,
+            "shards_quarantined": agg_quar_shards,
+            "drops": agg_drops,
             "iter_updates_yielded": consumer_counter[0],
-            "queue_depth_final": end_status["queue_depth"],
-            "queue_maxsize": end_status["queue_maxsize"],
+            "queue_depth_final": agg_queue_final,
         },
-        "shards": shards,
+        "venues": per_venue_summary,
+        "shards": all_shards,
         "events": list(recorder.events),
         "history_60s_buckets": recorder.history(bucket_s=60),
     }
@@ -1622,13 +1993,47 @@ async def main_async(args) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Universal WS soak probe with live dashboard")
-    parser.add_argument("--duration", type=int, required=True, help="Probe duration in seconds (86400 for 24h)")
-    parser.add_argument("--output", type=str, required=True, help="Final summary JSON path")
+    parser = argparse.ArgumentParser(
+        description="Universal WS soak probe with live dashboard"
+    )
+    parser.add_argument(
+        "--duration",
+        type=int,
+        required=True,
+        help="Probe duration in seconds (86400 for 24h)",
+    )
+    parser.add_argument(
+        "--output", type=str, required=True, help="Final summary JSON path"
+    )
     parser.add_argument("--port", type=int, default=8889, help="Dashboard HTTP port")
-    parser.add_argument("--shard-size", type=int, default=100, help="Markets per WS shard")
+    parser.add_argument(
+        "--shard-size", type=int, default=100, help="Markets per WS shard"
+    )
     parser.add_argument("--max-markets", type=int, default=5000, help="Universe cap")
-    parser.add_argument("--sample-period", type=float, default=2.0, help="Status sampling period (s)")
+    parser.add_argument(
+        "--sample-period", type=float, default=2.0, help="Status sampling period (s)"
+    )
+    # Kalshi: dual-venue dashboard.
+    parser.add_argument(
+        "--kalshi",
+        action="store_true",
+        help="Also run KalshiUniversalWS alongside Polymarket (dual-venue)",
+    )
+    parser.add_argument(
+        "--kalshi-config",
+        type=str,
+        default="config.live.yaml",
+        help="Config file with kalshi_api_key + kalshi_private_key",
+    )
+    parser.add_argument(
+        "--kalshi-base-ws",
+        type=str,
+        default="wss://demo-api.kalshi.co/trade-api/ws/v2",
+        help="Kalshi WS host (default: demo)",
+    )
+    parser.add_argument(
+        "--kalshi-conn-count", type=int, default=3, help="Kalshi conn pool size"
+    )
     args = parser.parse_args()
     asyncio.run(main_async(args))
 

@@ -208,21 +208,31 @@ await ws.stop()
 
 ---
 
-## Phase 6 — Probe dashboard integration on port 8889
+## Phase 6 — Probe dashboard integration on port 8889 — ✅ COMPLETE
 
 **Where:** extends `probe_universal_ws_dashboard.py` and its embedded SPA.
 
 **Goal:** Two-universe view in one dashboard. No new port unless the SPA can't host both cleanly.
 
 **Tasks:**
-- [ ] CLI flag: `--kalshi` (off by default until creds are wired in local config). When set, instantiate `KalshiUniversalWS` alongside `PolymarketUniversalWS`.
-- [ ] Add `/api/kalshi/status` and `/api/kalshi/markets` endpoints mirroring Polymarket equivalents.
-- [ ] SPA: add `#kalshi` route (markets list) and `#kalshi/<ticker>` route (single-market view).
-- [ ] Status page: side-by-side Polymarket / Kalshi telemetry blocks.
-- [ ] Persistence: extend `--output` JSON to include `kalshi` section with parallel structure.
-- [ ] Confirm CSS specificity fix (commit `28ffb57`) still holds with the new routes.
+- [x] CLI: `--kalshi` (off by default), `--kalshi-config`, `--kalshi-base-ws`, `--kalshi-conn-count`. Without `--kalshi`, dashboard behaves exactly as it did before (single-venue Polymarket).
+- [x] Phase 6a (commit `dd89981`): markets-browser surface on `KalshiUniversalWS` (`categories`, `markets_by_tag`, `market_detail`, `subscribe_market`, `unsubscribe_market`) — drop-in compatible with the Polymarket signatures.
+- [x] Phase 6b (this commit): dashboard refactor.
+  - `HistoryRecorder` accepts `sources: dict[str, WS]`; iterates all sources per sample; tags events with `venue`; produces aggregate + per-venue blocks. Backward compat preserved via positional `ws=`.
+  - `create_app(recorder, sources=…)` and endpoints route by `venue` prefix: `/api/categories` returns merged list with `pm:` / `ks:` slug prefixes + `venue` field. `/api/markets?tag=ks:KXNBA` dispatches to Kalshi. `/api/markets/{market_id}` dispatches by `"kalshi:"` prefix. `/ws` subscribe routes per-mid via prefix.
+  - Frontend: venue badges next to category labels (PM blue / KS teal). Slug prefixes are stripped from display labels.
+  - Output JSON: `venues` top-level block with per-venue summary; `aggregate` sums across venues; events tagged.
+- [x] CSS guard: `.venue-badge` rules added with class-only specificity; existing `#view-markets:not(.hidden)` guard intact.
 
-**Effort:** M. **Gain:** soak telemetry is observable; the universe is browseable.
+**Result of live verification (2026-05-26):**
+- `python3 probe_universal_ws_dashboard.py --duration 30 --kalshi --max-markets 50 --kalshi-conn-count 2`
+- Polymarket: 1 shard, 49 markets, 3,080 messages, 0 drops.
+- Kalshi: 2 conns, 66,503 markets, 131,072 messages, 0 drops.
+- `aggregate.total_messages=134,152`; output JSON `venues` block populated for both.
+- Events venue-tagged (`probe.kalshi=true`).
+- Full pytest suite (129) still green; module imports clean.
+
+**Effort:** M. **Gain:** soak telemetry is observable; the universe is browseable across both venues from one dashboard.
 
 ---
 
