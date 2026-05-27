@@ -850,3 +850,201 @@ def zlib_crc32_mod(ticker: str, n: int) -> int:
     import zlib
 
     return zlib.crc32(ticker.encode("utf-8")) % n
+
+
+# ---------------------------------------------------------------------------
+# Phase 6a: markets-browser surface
+# ---------------------------------------------------------------------------
+
+
+def _seed_market_meta(
+    ws: KalshiUniversalWS, ticker: str, series: str, title: str = ""
+) -> None:
+    """Pretend the REST market discovery step ran for this ticker."""
+    from kalshi_client.models import KalshiMarket
+
+    m = KalshiMarket(
+        ticker=ticker,
+        event_ticker=ticker.split("-")[0] if "-" in ticker else ticker,
+        series_ticker=series,
+        title=title or f"Mkt {ticker}",
+    )
+    ws._market_meta[ticker] = m
+    # Also register in the series_registry for category counts.
+    ws._note_market_added(ticker)
+
+
+class TestCategories:
+    def test_categories_groups_by_series_ticker(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        for i in range(5):
+            _seed_market_meta(ws, f"KXNBA-{i}", "KXNBA")
+        for i in range(3):
+            _seed_market_meta(ws, f"KXFED-{i}", "KXFED")
+
+        cats = ws.categories()
+        by_slug = {c["slug"]: c for c in cats}
+        assert by_slug["KXNBA"]["count"] == 5
+        assert by_slug["KXFED"]["count"] == 3
+        # Each category has required keys.
+        for c in cats:
+            for key in ("slug", "label", "class", "count", "msg_rate_sum"):
+                assert key in c, f"missing category key: {key}"
+
+    def test_categories_sorted_by_count_desc(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        for i in range(2):
+            _seed_market_meta(ws, f"KXA-{i}", "KXA")
+        for i in range(7):
+            _seed_market_meta(ws, f"KXB-{i}", "KXB")
+        for i in range(4):
+            _seed_market_meta(ws, f"KXC-{i}", "KXC")
+        cats = ws.categories()
+        counts = [c["count"] for c in cats]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_categories_kxmve_classified_as_programs(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_market_meta(ws, "KXMVE-ABC-1", "KXMVECROSSCATEGORY")
+        cats = ws.categories()
+        kxmve = next(c for c in cats if c["slug"] == "KXMVECROSSCATEGORY")
+        assert kxmve["class"] == "programs"
+
+    def test_categories_empty_when_no_markets(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        assert ws.categories() == []
+
+
+class TestMarketsByTag:
+    def test_filters_to_series(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        for i in range(3):
+            _seed_market_meta(ws, f"KXNBA-{i}", "KXNBA")
+        for i in range(2):
+            _seed_market_meta(ws, f"KXFED-{i}", "KXFED")
+        nba = ws.markets_by_tag("KXNBA")
+        assert len(nba) == 3
+        assert all(m["ticker"].startswith("KXNBA-") for m in nba)
+
+    def test_respects_limit(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        for i in range(50):
+            _seed_market_meta(ws, f"KXNBA-{i:02}", "KXNBA")
+        out = ws.markets_by_tag("KXNBA", limit=10)
+        assert len(out) == 10
+
+    def test_unknown_tag_returns_empty(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        assert ws.markets_by_tag("KXNOPE") == []
+
+
+class TestMarketDetail:
+    def test_market_detail_returns_snapshot_with_book(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_market_meta(ws, "KXNBA-1", "KXNBA", title="NBA Test")
+        _seed_assignment(ws, ["KXNBA-1"])
+        ws._apply_snapshot(
+            conn_id=0,
+            msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {
+                    "market_ticker": "KXNBA-1",
+                    "yes_dollars_fp": [["0.45", "100"]],
+                    "no_dollars_fp": [["0.55", "75"]],
+                },
+            },
+        )
+        d = ws.market_detail("kalshi:KXNBA-1")
+        assert d is not None
+        assert d["ticker"] == "KXNBA-1"
+        assert d["series_ticker"] == "KXNBA"
+        assert d["title"] == "NBA Test"
+        assert len(d["yes_bids"]) == 1
+        assert d["yes_bids"][0]["price"] == 0.45
+        assert len(d["no_bids"]) == 1
+
+    def test_market_detail_unknown_returns_none(self, rsa_key) -> None:
+        ws = _mk_ws(rsa_key, conn_count=1)
+        assert ws.market_detail("kalshi:NOPE") is None
+        # Without venue prefix → None.
+        assert ws.market_detail("polymarket:0xabc") is None
+
+
+class TestPerMarketSubscriber:
+    def test_subscribe_unsubscribe_market_fanout(self, rsa_key) -> None:
+        import asyncio
+
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_market_meta(ws, "KXNBA-9", "KXNBA")
+        _seed_assignment(ws, ["KXNBA-9"])
+        q: asyncio.Queue = asyncio.Queue(maxsize=10)
+
+        ws.subscribe_market("kalshi:KXNBA-9", q)
+        # Apply a snapshot → fanout must push at least one event.
+        ws._apply_snapshot(
+            conn_id=0,
+            msg={
+                "type": "orderbook_snapshot",
+                "sid": 1,
+                "seq": 1,
+                "msg": {
+                    "market_ticker": "KXNBA-9",
+                    "yes_dollars_fp": [["0.5", "10"]],
+                },
+            },
+        )
+        assert not q.empty()
+        evt = q.get_nowait()
+        assert evt["ticker"] == "KXNBA-9"
+        assert evt["kind"] == "snapshot"
+
+        ws.unsubscribe_market("kalshi:KXNBA-9", q)
+        # Drain anything left.
+        while not q.empty():
+            q.get_nowait()
+        # Next apply must NOT enqueue.
+        ws._apply_delta(
+            conn_id=0,
+            msg={
+                "type": "orderbook_delta",
+                "sid": 1,
+                "seq": 2,
+                "msg": {
+                    "market_ticker": "KXNBA-9",
+                    "price_dollars": "0.5",
+                    "delta_fp": "1",
+                    "side": "yes",
+                },
+            },
+        )
+        assert q.empty()
+
+    def test_per_market_subscriber_drop_oldest_on_full(self, rsa_key) -> None:
+        import asyncio
+
+        ws = _mk_ws(rsa_key, conn_count=1)
+        _seed_market_meta(ws, "KXNBA-X", "KXNBA")
+        _seed_assignment(ws, ["KXNBA-X"])
+        q: asyncio.Queue = asyncio.Queue(maxsize=2)
+        ws.subscribe_market("kalshi:KXNBA-X", q)
+
+        # Push three apply events; queue maxsize 2 → oldest evicted.
+        for i in range(3):
+            ws._apply_delta(
+                conn_id=0,
+                msg={
+                    "type": "orderbook_delta",
+                    "sid": 1,
+                    "seq": i + 1,
+                    "msg": {
+                        "market_ticker": "KXNBA-X",
+                        "price_dollars": f"0.{40 + i}",
+                        "delta_fp": "1",
+                        "side": "yes",
+                    },
+                },
+            )
+        # Queue has at most 2 items.
+        assert q.qsize() <= 2

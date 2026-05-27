@@ -37,8 +37,10 @@ import websockets
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from websockets.exceptions import ConnectionClosed
 
+from collections import deque
+
 from kalshi_client.auth import build_headers
-from kalshi_client.models import KalshiOrderBook
+from kalshi_client.models import KalshiMarket, KalshiOrderBook
 from polymarket_client.models import OrderBook, PriceLevel
 
 logger = logging.getLogger(__name__)
@@ -225,6 +227,20 @@ class KalshiUniversalWS:
         # 0 is reserved by Kalshi ("treated as no id"); start at 1.
         self._cmd_id_seq = 1
 
+        # Phase 6a markets-browser surface.
+        # ticker → KalshiMarket metadata (title, series_ticker, ...). Populated
+        # at start() time from REST and refreshed on lifecycle activations.
+        self._market_meta: dict[str, KalshiMarket] = {}
+        # series_ticker → {slug, label, class, count, msg_rate_sum}.
+        self._series_registry: dict[str, dict] = {}
+        # ticker → set[asyncio.Queue] for per-market fanout (FastAPI WS clients).
+        self._market_subscribers: dict[str, set[asyncio.Queue]] = {}
+        # Per-market message bookkeeping (for msg_rate, detail snapshots).
+        self._market_msg_count: dict[str, int] = {}
+        self._market_last_msg_at: dict[str, float] = {}
+        self._market_msg_timestamps: dict[str, deque] = {}
+        self._market_recent_events: dict[str, deque] = {}
+
     # ------------------------------------------------------------------
     # Internal data path — exercised by unit tests.
     # ------------------------------------------------------------------
@@ -260,6 +276,16 @@ class KalshiUniversalWS:
 
         state = self._conn_state[conn_id]
         state.snapshot_count += 1
+        self._record_market_event(ticker, "snapshot")
+        self._fanout(
+            ticker,
+            {
+                "ticker": ticker,
+                "kind": "snapshot",
+                "yes_bids": [(l.price, l.size) for l in yes_bids],
+                "no_bids": [(l.price, l.size) for l in no_bids],
+            },
+        )
         return ticker
 
     def _apply_delta(self, conn_id: int, msg: dict) -> Optional[str]:
@@ -319,6 +345,17 @@ class KalshiUniversalWS:
 
         state = self._conn_state[conn_id]
         state.delta_count += 1
+        self._record_market_event(ticker, "delta")
+        self._fanout(
+            ticker,
+            {
+                "ticker": ticker,
+                "kind": "delta",
+                "side": side,
+                "price": price,
+                "delta": delta,
+            },
+        )
         return ticker
 
     def _track_seq(self, conn_id: int, seq: int) -> bool:
@@ -376,6 +413,7 @@ class KalshiUniversalWS:
         self._ticker_to_conn[ticker] = conn_id
         self._conn_tickers[conn_id].append(ticker)
         state.tickers += 1
+        self._note_market_added(ticker)
         return {
             "id": self._next_cmd_id(),
             "cmd": "update_subscription",
@@ -407,6 +445,7 @@ class KalshiUniversalWS:
             pass
         self._books.pop(ticker, None)
         state.tickers = max(0, state.tickers - 1)
+        self._note_market_removed(ticker)
         return {
             "id": self._next_cmd_id(),
             "cmd": "update_subscription",
@@ -608,6 +647,208 @@ class KalshiUniversalWS:
             return None
         return book.to_unified_orderbook()
 
+    # ------------------------------------------------------------------
+    # Phase 6a: markets-browser surface.
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _infer_series(ticker: str, meta: Optional[KalshiMarket]) -> str:
+        """Series ticker = first '-' segment, or KalshiMarket.series_ticker."""
+        if meta and meta.series_ticker:
+            return meta.series_ticker
+        return ticker.split("-", 1)[0] if "-" in ticker else ticker
+
+    @staticmethod
+    def _classify_series(slug: str) -> str:
+        """KXMVE multivariate series → 'programs' so they group apart."""
+        return "programs" if slug.startswith("KXMVE") else "topic"
+
+    def _note_market_added(self, ticker: str) -> None:
+        """Register a ticker in the series_registry. Idempotent."""
+        meta = self._market_meta.get(ticker)
+        slug = self._infer_series(ticker, meta)
+        rec = self._series_registry.get(slug)
+        if rec is None:
+            rec = {
+                "slug": slug,
+                "label": slug,
+                "class": self._classify_series(slug),
+                "count": 0,
+                "msg_rate_sum": 0.0,
+                "_tickers": set(),
+            }
+            self._series_registry[slug] = rec
+        if ticker not in rec["_tickers"]:
+            rec["_tickers"].add(ticker)
+            rec["count"] = len(rec["_tickers"])
+
+    def _note_market_removed(self, ticker: str) -> None:
+        """Drop a ticker from the series_registry; remove empty series."""
+        meta = self._market_meta.get(ticker)
+        slug = self._infer_series(ticker, meta)
+        rec = self._series_registry.get(slug)
+        if rec is None:
+            return
+        rec["_tickers"].discard(ticker)
+        rec["count"] = len(rec["_tickers"])
+        if rec["count"] == 0:
+            self._series_registry.pop(slug, None)
+        # Also drop per-market bookkeeping.
+        self._market_meta.pop(ticker, None)
+        self._market_msg_count.pop(ticker, None)
+        self._market_last_msg_at.pop(ticker, None)
+        self._market_msg_timestamps.pop(ticker, None)
+        self._market_recent_events.pop(ticker, None)
+        self._market_subscribers.pop(ticker, None)
+
+    def _record_market_event(self, ticker: str, kind: str) -> None:
+        """Update per-market counters; trim 60s rolling timestamp deque."""
+        now = time.monotonic()
+        self._market_msg_count[ticker] = self._market_msg_count.get(ticker, 0) + 1
+        self._market_last_msg_at[ticker] = now
+        ts = self._market_msg_timestamps.setdefault(ticker, deque())
+        ts.append(now)
+        # Prune to 60s window.
+        cutoff = now - 60.0
+        while ts and ts[0] < cutoff:
+            ts.popleft()
+        ev = self._market_recent_events.setdefault(ticker, deque(maxlen=20))
+        ev.append({"t": now, "kind": kind})
+
+    def _fanout(self, ticker: str, event: dict) -> None:
+        """Push an event dict to each subscriber queue for `ticker`. Drop-oldest on overflow."""
+        subs = self._market_subscribers.get(ticker)
+        if not subs:
+            return
+        for q in list(subs):
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:
+                try:
+                    q.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    q.put_nowait(event)
+                except asyncio.QueueFull:
+                    pass
+
+    def categories(self) -> list[dict]:
+        """Sidebar payload, sorted by count desc."""
+        out = []
+        for rec in self._series_registry.values():
+            out.append(
+                {
+                    "slug": rec["slug"],
+                    "label": rec["label"],
+                    "class": rec["class"],
+                    "count": rec["count"],
+                    "msg_rate_sum": round(self._series_msg_rate(rec["slug"]), 2),
+                }
+            )
+        out.sort(key=lambda c: (-c["count"], c["slug"]))
+        return out
+
+    def _series_msg_rate(self, slug: str) -> float:
+        """60s rolling msg rate summed across tickers in this series."""
+        rec = self._series_registry.get(slug)
+        if rec is None:
+            return 0.0
+        total = 0.0
+        for t in rec["_tickers"]:
+            ts = self._market_msg_timestamps.get(t)
+            if ts:
+                total += len(ts) / 60.0
+        return total
+
+    def markets_by_tag(
+        self, tag_slug: str, sort: str = "count", limit: int = 200
+    ) -> list[dict]:
+        """Markets in a series, sorted, paginated."""
+        rec = self._series_registry.get(tag_slug)
+        if rec is None:
+            return []
+        rows = []
+        for t in rec["_tickers"]:
+            book = self._books.get(t)
+            meta = self._market_meta.get(t)
+            row = {
+                "ticker": t,
+                "market_id": f"kalshi:{t}",
+                "title": meta.title if meta else t,
+                "msg_count": self._market_msg_count.get(t, 0),
+                "last_msg_age_s": (
+                    round(time.monotonic() - self._market_last_msg_at[t], 3)
+                    if t in self._market_last_msg_at
+                    else None
+                ),
+                "volume_24h": meta.volume if meta else 0.0,
+                "best_bid_yes": book.best_bid_yes if book else None,
+                "best_bid_no": book.best_bid_no if book else None,
+            }
+            rows.append(row)
+        if sort == "count":
+            rows.sort(key=lambda r: (-(r["msg_count"] or 0), r["ticker"]))
+        elif sort == "volume":
+            rows.sort(key=lambda r: -(r["volume_24h"] or 0))
+        else:
+            rows.sort(key=lambda r: r["ticker"])
+        return rows[:limit]
+
+    def market_detail(self, market_id: str) -> Optional[dict]:
+        """Per-market snapshot. `market_id` must be 'kalshi:TICKER'."""
+        if not isinstance(market_id, str) or not market_id.startswith("kalshi:"):
+            return None
+        ticker = market_id[len("kalshi:") :]
+        book = self._books.get(ticker)
+        meta = self._market_meta.get(ticker)
+        if book is None and meta is None:
+            return None
+        return {
+            "market_id": market_id,
+            "ticker": ticker,
+            "title": meta.title if meta else ticker,
+            "series_ticker": self._infer_series(ticker, meta),
+            "event_ticker": meta.event_ticker if meta else "",
+            "yes_bids": (
+                [{"price": l.price, "size": l.size} for l in book.yes_bids]
+                if book
+                else []
+            ),
+            "no_bids": (
+                [{"price": l.price, "size": l.size} for l in book.no_bids]
+                if book
+                else []
+            ),
+            "best_bid_yes": book.best_bid_yes if book else None,
+            "best_bid_no": book.best_bid_no if book else None,
+            "msg_count": self._market_msg_count.get(ticker, 0),
+            "last_msg_age_s": (
+                round(time.monotonic() - self._market_last_msg_at[ticker], 3)
+                if ticker in self._market_last_msg_at
+                else None
+            ),
+            "recent_events": list(self._market_recent_events.get(ticker, ())),
+        }
+
+    def subscribe_market(self, market_id: str, q: asyncio.Queue) -> None:
+        """Register a per-market subscriber queue for live fanout."""
+        if not market_id.startswith("kalshi:"):
+            return
+        ticker = market_id[len("kalshi:") :]
+        self._market_subscribers.setdefault(ticker, set()).add(q)
+
+    def unsubscribe_market(self, market_id: str, q: asyncio.Queue) -> None:
+        """Detach a subscriber queue."""
+        if not market_id.startswith("kalshi:"):
+            return
+        ticker = market_id[len("kalshi:") :]
+        subs = self._market_subscribers.get(ticker)
+        if subs is not None:
+            subs.discard(q)
+            if not subs:
+                self._market_subscribers.pop(ticker, None)
+
     async def iter_updates(self):
         """
         Yield (market_id, OrderBook) tuples as books change. Latest-wins
@@ -675,6 +916,7 @@ class KalshiUniversalWS:
             self._conn_tickers[cid] = list(sub)
             for t in sub:
                 self._ticker_to_conn[t] = cid
+                self._note_market_added(t)
             self._conn_state[cid].tickers = len(sub)
 
         self._started = True
